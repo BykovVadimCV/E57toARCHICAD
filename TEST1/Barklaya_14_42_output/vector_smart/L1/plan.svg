@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-13.65 -11.051884351991829 12.8 12.561884351991829" width="1280" height="1256">
+  <rect x="-13.65" y="-11.051884351991829" width="12.8" height="12.561884351991829" fill="#f5f5f5" />
+  <polygon points="-12.65,-2.79 -12.39,-2.79 -12.39,-2.37 -12.65,-2.37" fill="#e8f4f8" stroke="none" />
+  <polygon points="-3.8499999999999996,-0.31000000000000005 -1.8499999999999996,-0.31000000000000005 -1.8499999999999996,0.51 -3.8499999999999996,0.51" fill="#e8f4f8" stroke="none" />
+  <polyline points="-9.89,-6.23 -9.89,-10.051884351991829" fill="none" stroke="#4a4a4a" stroke-width="20.0" stroke-linecap="square" />
+  <polyline points="-9.89,-6.23 -9.89,-8.132629759044045" fill="none" stroke="#4a4a4a" stroke-width="20.0" stroke-linecap="square" />
+  <polyline points="-9.99,-4.33 -7.82546771795845,-4.33" fill="none" stroke="#4a4a4a" stroke-width="20.0" stroke-linecap="square" />
+  <line x1="-9.91" y1="-4.53" x2="-9.870000000000001" y2="-4.67" stroke="#d66049" stroke-width="0.08" stroke-linecap="round" />
+  <line x1="-9.93" y1="-4.15" x2="-9.870000000000001" y2="-4.19" stroke="#4393c3" stroke-width="0.08" stroke-linecap="round" />
+  <text x="-12.523787234042553" y="-2.564382978723404" text-anchor="middle" font-size="0.3" font-family="sans-serif" fill="#333">0.1 m²</text>
+  <text x="-2.817119584055458" y="0.037181975736568784" text-anchor="middle" font-size="0.3" font-family="sans-serif" fill="#333">1.2 m²</text>
+</svg>
