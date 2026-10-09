@@ -1,0 +1,2840 @@
+{
+  "level": "L1",
+  "floor_z": -0.02,
+  "ceiling_z": 3.0,
+  "walls": [
+    {
+      "id": "wall_000",
+      "points": [
+        [
+          -0.08,
+          2.33
+        ],
+        [
+          -0.08,
+          -0.46
+        ]
+      ],
+      "thickness": 0.153,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.79
+    },
+    {
+      "id": "wall_001",
+      "points": [
+        [
+          5.05,
+          8.08
+        ],
+        [
+          -0.08,
+          7.4
+        ]
+      ],
+      "thickness": 0.102,
+      "rooms": [],
+      "is_outer": false,
+      "length": 5.17
+    },
+    {
+      "id": "wall_002",
+      "points": [
+        [
+          1.71,
+          2.75
+        ],
+        [
+          1.71,
+          -0.08
+        ]
+      ],
+      "thickness": 0.193,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.83
+    },
+    {
+      "id": "wall_003",
+      "points": [
+        [
+          5.72,
+          4.75
+        ],
+        [
+          1.76,
+          4.45
+        ]
+      ],
+      "thickness": 0.186,
+      "rooms": [],
+      "is_outer": false,
+      "length": 3.97
+    },
+    {
+      "id": "wall_004",
+      "points": [
+        [
+          -2.79,
+          7.04
+        ],
+        [
+          -7.84,
+          6.38
+        ]
+      ],
+      "thickness": 0.107,
+      "rooms": [],
+      "is_outer": false,
+      "length": 5.1
+    },
+    {
+      "id": "wall_005",
+      "points": [
+        [
+          0.17,
+          5.34
+        ],
+        [
+          -0.01,
+          7.38
+        ]
+      ],
+      "thickness": 0.181,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.05
+    },
+    {
+      "id": "wall_006",
+      "points": [
+        [
+          -8.11,
+          0.36
+        ],
+        [
+          -5.97,
+          0.36
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.14
+    },
+    {
+      "id": "wall_007",
+      "points": [
+        [
+          -2.67,
+          5.09
+        ],
+        [
+          -2.89,
+          7.1
+        ]
+      ],
+      "thickness": 0.162,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.02
+    },
+    {
+      "id": "wall_008",
+      "points": [
+        [
+          1.52,
+          -0.02
+        ],
+        [
+          3.62,
+          -0.02
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.11
+    },
+    {
+      "id": "wall_009",
+      "points": [
+        [
+          -0.66,
+          7.21
+        ],
+        [
+          -2.88,
+          6.95
+        ]
+      ],
+      "thickness": 0.096,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.24
+    },
+    {
+      "id": "wall_010",
+      "points": [
+        [
+          -0.22,
+          -0.1
+        ],
+        [
+          1.69,
+          -0.1
+        ]
+      ],
+      "thickness": 0.096,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.91
+    },
+    {
+      "id": "wall_011",
+      "points": [
+        [
+          1.77,
+          4.48
+        ],
+        [
+          1.0,
+          4.42
+        ]
+      ],
+      "thickness": 0.182,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.77
+    },
+    {
+      "id": "wall_012",
+      "points": [
+        [
+          -1.78,
+          2.33
+        ],
+        [
+          -1.78,
+          0.38
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.95
+    },
+    {
+      "id": "wall_013",
+      "points": [
+        [
+          -4.81,
+          0.28
+        ],
+        [
+          -3.59,
+          0.28
+        ]
+      ],
+      "thickness": 0.096,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.22
+    },
+    {
+      "id": "wall_014",
+      "points": [
+        [
+          5.37,
+          4.66
+        ],
+        [
+          5.21,
+          6.07
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.42
+    },
+    {
+      "id": "wall_015",
+      "points": [
+        [
+          -8.75,
+          3.57
+        ],
+        [
+          -7.6,
+          3.57
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.15
+    },
+    {
+      "id": "wall_016",
+      "points": [
+        [
+          5.54,
+          2.92
+        ],
+        [
+          5.46,
+          2.33
+        ]
+      ],
+      "thickness": 0.175,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.6
+    },
+    {
+      "id": "wall_017",
+      "points": [
+        [
+          -2.6,
+          2.27
+        ],
+        [
+          -1.66,
+          2.27
+        ]
+      ],
+      "thickness": 0.116,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.94
+    },
+    {
+      "id": "wall_018",
+      "points": [
+        [
+          -1.78,
+          -0.39
+        ],
+        [
+          -1.8,
+          -1.16
+        ]
+      ],
+      "thickness": 0.111,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.77
+    },
+    {
+      "id": "wall_019",
+      "points": [
+        [
+          -5.49,
+          3.72
+        ],
+        [
+          -7.5,
+          3.61
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.01
+    },
+    {
+      "id": "wall_020",
+      "points": [
+        [
+          -3.19,
+          0.3
+        ],
+        [
+          -2.51,
+          0.27
+        ]
+      ],
+      "thickness": 0.096,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.69
+    },
+    {
+      "id": "wall_021",
+      "points": [
+        [
+          -0.17,
+          0.56
+        ],
+        [
+          -0.2,
+          -0.44
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.99
+    },
+    {
+      "id": "wall_022",
+      "points": [
+        [
+          -8.18,
+          3.34
+        ],
+        [
+          -8.21,
+          4.14
+        ]
+      ],
+      "thickness": 0.112,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.8
+    },
+    {
+      "id": "wall_023",
+      "points": [
+        [
+          -0.46,
+          2.25
+        ],
+        [
+          -0.14,
+          2.19
+        ]
+      ],
+      "thickness": 0.204,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.33
+    },
+    {
+      "id": "wall_024",
+      "points": [
+        [
+          -4.68,
+          3.8
+        ],
+        [
+          -4.03,
+          3.8
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.65
+    },
+    {
+      "id": "wall_025",
+      "points": [
+        [
+          -2.58,
+          3.91
+        ],
+        [
+          -3.62,
+          3.84
+        ]
+      ],
+      "thickness": 0.09,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.04
+    },
+    {
+      "id": "wall_026",
+      "points": [
+        [
+          -4.49,
+          3.79
+        ],
+        [
+          -5.63,
+          3.72
+        ]
+      ],
+      "thickness": 0.091,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.14
+    },
+    {
+      "id": "wall_027",
+      "points": [
+        [
+          4.15,
+          -0.03
+        ],
+        [
+          5.39,
+          -0.09
+        ]
+      ],
+      "thickness": 0.08,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.24
+    },
+    {
+      "id": "wall_028",
+      "points": [
+        [
+          0.05,
+          7.34
+        ],
+        [
+          -2.82,
+          6.92
+        ]
+      ],
+      "thickness": 0.083,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.89
+    },
+    {
+      "id": "wall_029",
+      "points": [
+        [
+          0.86,
+          5.44
+        ],
+        [
+          -1.05,
+          5.28
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.92
+    },
+    {
+      "id": "wall_030",
+      "points": [
+        [
+          -5.38,
+          6.72
+        ],
+        [
+          -8.51,
+          6.27
+        ]
+      ],
+      "thickness": 0.083,
+      "rooms": [],
+      "is_outer": false,
+      "length": 3.16
+    },
+    {
+      "id": "wall_031",
+      "points": [
+        [
+          5.59,
+          4.05
+        ],
+        [
+          5.51,
+          4.78
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.74
+    },
+    {
+      "id": "wall_032",
+      "points": [
+        [
+          -1.96,
+          5.19
+        ],
+        [
+          -2.61,
+          5.15
+        ]
+      ],
+      "thickness": 0.086,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.65
+    },
+    {
+      "id": "wall_033",
+      "points": [
+        [
+          -5.14,
+          0.34
+        ],
+        [
+          -5.68,
+          0.29
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.54
+    },
+    {
+      "id": "wall_034",
+      "points": [
+        [
+          -2.53,
+          0.45
+        ],
+        [
+          -2.53,
+          1.36
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.91
+    },
+    {
+      "id": "wall_035",
+      "points": [
+        [
+          0.19,
+          5.34
+        ],
+        [
+          -0.1,
+          7.38
+        ]
+      ],
+      "thickness": 0.163,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.06
+    },
+    {
+      "id": "wall_036",
+      "points": [
+        [
+          -8.1,
+          0.94
+        ],
+        [
+          -8.1,
+          0.39
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.56
+    },
+    {
+      "id": "wall_037",
+      "points": [
+        [
+          5.5,
+          0.51
+        ],
+        [
+          5.46,
+          -0.06
+        ]
+      ],
+      "thickness": 0.086,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.57
+    },
+    {
+      "id": "wall_038",
+      "points": [
+        [
+          -8.42,
+          6.29
+        ],
+        [
+          -8.4,
+          5.8
+        ]
+      ],
+      "thickness": 0.092,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.49
+    },
+    {
+      "id": "wall_040",
+      "points": [
+        [
+          -2.54,
+          1.96
+        ],
+        [
+          -2.55,
+          2.49
+        ]
+      ],
+      "thickness": 0.112,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.53
+    },
+    {
+      "id": "wall_041",
+      "points": [
+        [
+          0.99,
+          3.19
+        ],
+        [
+          1.04,
+          2.76
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.44
+    },
+    {
+      "id": "wall_042",
+      "points": [
+        [
+          -2.76,
+          0.66
+        ],
+        [
+          -2.74,
+          0.25
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.41
+    },
+    {
+      "id": "wall_043",
+      "points": [
+        [
+          -4.75,
+          0.35
+        ],
+        [
+          -5.27,
+          0.29
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.53
+    },
+    {
+      "id": "wall_044",
+      "points": [
+        [
+          -0.11,
+          1.06
+        ],
+        [
+          -0.15,
+          2.36
+        ]
+      ],
+      "thickness": 0.161,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.29
+    },
+    {
+      "id": "wall_045",
+      "points": [
+        [
+          4.15,
+          -0.05
+        ],
+        [
+          3.35,
+          -0.05
+        ]
+      ],
+      "thickness": 0.101,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.8
+    },
+    {
+      "id": "wall_046",
+      "points": [
+        [
+          1.45,
+          2.73
+        ],
+        [
+          1.05,
+          2.69
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.41
+    },
+    {
+      "id": "wall_049",
+      "points": [
+        [
+          5.35,
+          4.62
+        ],
+        [
+          5.2,
+          6.05
+        ]
+      ],
+      "thickness": 0.101,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.44
+    },
+    {
+      "id": "wall_050",
+      "points": [
+        [
+          -3.59,
+          3.83
+        ],
+        [
+          -4.32,
+          3.82
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.73
+    },
+    {
+      "id": "wall_051",
+      "points": [
+        [
+          1.63,
+          -0.26
+        ],
+        [
+          1.58,
+          0.07
+        ]
+      ],
+      "thickness": 0.164,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.33
+    },
+    {
+      "id": "wall_052",
+      "points": [
+        [
+          -0.01,
+          2.73
+        ],
+        [
+          -0.05,
+          2.27
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.46
+    },
+    {
+      "id": "wall_053",
+      "points": [
+        [
+          -5.9,
+          3.73
+        ],
+        [
+          -5.37,
+          3.73
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.54
+    },
+    {
+      "id": "wall_054",
+      "points": [
+        [
+          -5.59,
+          0.34
+        ],
+        [
+          -5.99,
+          0.31
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.41
+    },
+    {
+      "id": "wall_056",
+      "points": [
+        [
+          4.7,
+          8.05
+        ],
+        [
+          0.47,
+          7.49
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 4.27
+    },
+    {
+      "id": "wall_058",
+      "points": [
+        [
+          -6.56,
+          6.57
+        ],
+        [
+          -8.43,
+          6.3
+        ]
+      ],
+      "thickness": 0.083,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.9
+    },
+    {
+      "id": "wall_059",
+      "points": [
+        [
+          2.19,
+          4.53
+        ],
+        [
+          1.2,
+          4.39
+        ]
+      ],
+      "thickness": 0.165,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.0
+    },
+    {
+      "id": "wall_060",
+      "points": [
+        [
+          5.47,
+          2.23
+        ],
+        [
+          5.4,
+          2.92
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.69
+    },
+    {
+      "id": "wall_061",
+      "points": [
+        [
+          5.62,
+          3.57
+        ],
+        [
+          5.62,
+          3.22
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.35
+    },
+    {
+      "id": "wall_062",
+      "points": [
+        [
+          -2.43,
+          0.6
+        ],
+        [
+          -2.83,
+          0.58
+        ]
+      ],
+      "thickness": 0.091,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.4
+    },
+    {
+      "id": "wall_064",
+      "points": [
+        [
+          -2.51,
+          1.4
+        ],
+        [
+          -2.55,
+          1.71
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.31
+    },
+    {
+      "id": "wall_065",
+      "points": [
+        [
+          -8.06,
+          0.92
+        ],
+        [
+          -8.06,
+          0.38
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.54
+    },
+    {
+      "id": "wall_066",
+      "points": [
+        [
+          -2.73,
+          6.3
+        ],
+        [
+          -2.81,
+          7.03
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.73
+    },
+    {
+      "id": "wall_067",
+      "points": [
+        [
+          -8.73,
+          3.61
+        ],
+        [
+          -8.16,
+          3.56
+        ]
+      ],
+      "thickness": 0.163,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.57
+    },
+    {
+      "id": "wall_068",
+      "points": [
+        [
+          -2.71,
+          4.98
+        ],
+        [
+          -2.78,
+          5.56
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.58
+    },
+    {
+      "id": "wall_069",
+      "points": [
+        [
+          -0.06,
+          0.2
+        ],
+        [
+          -0.13,
+          1.0
+        ]
+      ],
+      "thickness": 0.161,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.81
+    },
+    {
+      "id": "wall_071",
+      "points": [
+        [
+          1.74,
+          2.74
+        ],
+        [
+          1.37,
+          2.69
+        ]
+      ],
+      "thickness": 0.083,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.38
+    },
+    {
+      "id": "wall_072",
+      "points": [
+        [
+          -2.66,
+          5.49
+        ],
+        [
+          -2.74,
+          6.3
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.81
+    },
+    {
+      "id": "wall_073",
+      "points": [
+        [
+          -2.78,
+          0.68
+        ],
+        [
+          -2.83,
+          0.34
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.35
+    },
+    {
+      "id": "wall_074",
+      "points": [
+        [
+          2.07,
+          4.57
+        ],
+        [
+          4.6,
+          4.57
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.52
+    },
+    {
+      "id": "wall_075",
+      "points": [
+        [
+          1.03,
+          3.03
+        ],
+        [
+          0.99,
+          3.35
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.33
+    },
+    {
+      "id": "wall_076",
+      "points": [
+        [
+          0.09,
+          7.29
+        ],
+        [
+          -1.28,
+          7.15
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.38
+    },
+    {
+      "id": "wall_077",
+      "points": [
+        [
+          5.59,
+          4.68
+        ],
+        [
+          4.69,
+          4.59
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.91
+    },
+    {
+      "id": "wall_078",
+      "points": [
+        [
+          -7.02,
+          0.33
+        ],
+        [
+          -5.99,
+          0.33
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.02
+    },
+    {
+      "id": "wall_079",
+      "points": [
+        [
+          -7.33,
+          3.63
+        ],
+        [
+          -8.13,
+          3.56
+        ]
+      ],
+      "thickness": 0.086,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.81
+    },
+    {
+      "id": "wall_080",
+      "points": [
+        [
+          5.6,
+          4.25
+        ],
+        [
+          5.56,
+          3.74
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.51
+    },
+    {
+      "id": "wall_081",
+      "points": [
+        [
+          -2.75,
+          5.25
+        ],
+        [
+          -2.93,
+          7.2
+        ]
+      ],
+      "thickness": 0.08,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.95
+    },
+    {
+      "id": "wall_082",
+      "points": [
+        [
+          5.27,
+          4.86
+        ],
+        [
+          5.78,
+          4.79
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.51
+    },
+    {
+      "id": "wall_084",
+      "points": [
+        [
+          5.47,
+          0.54
+        ],
+        [
+          5.43,
+          0.21
+        ]
+      ],
+      "thickness": 0.087,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.34
+    },
+    {
+      "id": "wall_085",
+      "points": [
+        [
+          1.3,
+          4.5
+        ],
+        [
+          0.88,
+          4.39
+        ]
+      ],
+      "thickness": 0.111,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.43
+    },
+    {
+      "id": "wall_088",
+      "points": [
+        [
+          0.01,
+          -0.32
+        ],
+        [
+          -0.14,
+          1.06
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.38
+    },
+    {
+      "id": "wall_089",
+      "points": [
+        [
+          -0.09,
+          7.47
+        ],
+        [
+          0.31,
+          7.42
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.41
+    },
+    {
+      "id": "wall_091",
+      "points": [
+        [
+          3.12,
+          4.63
+        ],
+        [
+          1.0,
+          4.35
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.13
+    },
+    {
+      "id": "wall_092",
+      "points": [
+        [
+          4.09,
+          -0.04
+        ],
+        [
+          4.57,
+          -0.09
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.49
+    },
+    {
+      "id": "wall_093",
+      "points": [
+        [
+          -1.21,
+          7.13
+        ],
+        [
+          -2.1,
+          7.02
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.9
+    },
+    {
+      "id": "wall_094",
+      "points": [
+        [
+          2.1,
+          0.01
+        ],
+        [
+          2.66,
+          -0.05
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.57
+    },
+    {
+      "id": "wall_095",
+      "points": [
+        [
+          -4.69,
+          0.33
+        ],
+        [
+          -3.85,
+          0.25
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.85
+    },
+    {
+      "id": "wall_096",
+      "points": [
+        [
+          -0.05,
+          1.32
+        ],
+        [
+          -0.13,
+          0.52
+        ]
+      ],
+      "thickness": 0.162,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.81
+    },
+    {
+      "id": "wall_097",
+      "points": [
+        [
+          -1.75,
+          1.02
+        ],
+        [
+          -1.81,
+          0.44
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.59
+    },
+    {
+      "id": "wall_098",
+      "points": [
+        [
+          -2.49,
+          0.92
+        ],
+        [
+          -2.55,
+          0.36
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.57
+    },
+    {
+      "id": "wall_099",
+      "points": [
+        [
+          -2.51,
+          1.21
+        ],
+        [
+          -2.54,
+          1.53
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.33
+    },
+    {
+      "id": "wall_100",
+      "points": [
+        [
+          -2.56,
+          0.32
+        ],
+        [
+          -3.07,
+          0.25
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.51
+    },
+    {
+      "id": "wall_102",
+      "points": [
+        [
+          -5.19,
+          0.35
+        ],
+        [
+          -4.78,
+          0.29
+        ]
+      ],
+      "thickness": 0.087,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.41
+    },
+    {
+      "id": "wall_103",
+      "points": [
+        [
+          1.92,
+          0.01
+        ],
+        [
+          2.4,
+          -0.05
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.49
+    },
+    {
+      "id": "wall_104",
+      "points": [
+        [
+          -3.86,
+          0.32
+        ],
+        [
+          -3.52,
+          0.31
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.35
+    },
+    {
+      "id": "wall_105",
+      "points": [
+        [
+          2.57,
+          0.01
+        ],
+        [
+          3.05,
+          -0.05
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.49
+    },
+    {
+      "id": "wall_106",
+      "points": [
+        [
+          -7.95,
+          0.39
+        ],
+        [
+          -7.47,
+          0.34
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.49
+    },
+    {
+      "id": "wall_107",
+      "points": [
+        [
+          0.82,
+          5.46
+        ],
+        [
+          0.33,
+          5.39
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.49
+    },
+    {
+      "id": "wall_108",
+      "points": [
+        [
+          -1.75,
+          1.46
+        ],
+        [
+          -1.81,
+          2.06
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.61
+    },
+    {
+      "id": "wall_109",
+      "points": [
+        [
+          -5.93,
+          0.35
+        ],
+        [
+          -5.29,
+          0.29
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.64
+    },
+    {
+      "id": "wall_111",
+      "points": [
+        [
+          -7.75,
+          0.39
+        ],
+        [
+          -7.14,
+          0.33
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.62
+    },
+    {
+      "id": "wall_112",
+      "points": [
+        [
+          2.32,
+          0.01
+        ],
+        [
+          1.19,
+          -0.11
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.14
+    },
+    {
+      "id": "wall_113",
+      "points": [
+        [
+          -1.75,
+          1.21
+        ],
+        [
+          -1.81,
+          0.7
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.52
+    },
+    {
+      "id": "wall_114",
+      "points": [
+        [
+          -8.16,
+          3.38
+        ],
+        [
+          -8.25,
+          4.18
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.81
+    },
+    {
+      "id": "wall_115",
+      "points": [
+        [
+          -0.13,
+          7.43
+        ],
+        [
+          0.2,
+          7.4
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.33
+    },
+    {
+      "id": "wall_116",
+      "points": [
+        [
+          -7.5,
+          0.39
+        ],
+        [
+          -7.01,
+          0.34
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.49
+    },
+    {
+      "id": "wall_117",
+      "points": [
+        [
+          1.71,
+          0.6
+        ],
+        [
+          1.64,
+          -0.19
+        ]
+      ],
+      "thickness": 0.164,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.79
+    },
+    {
+      "id": "wall_119",
+      "points": [
+        [
+          3.1,
+          4.63
+        ],
+        [
+          3.99,
+          4.53
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.9
+    },
+    {
+      "id": "wall_120",
+      "points": [
+        [
+          5.45,
+          -0.1
+        ],
+        [
+          5.44,
+          0.23
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.32
+    },
+    {
+      "id": "wall_121",
+      "points": [
+        [
+          5.8,
+          4.76
+        ],
+        [
+          3.94,
+          4.54
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.88
+    },
+    {
+      "id": "wall_123",
+      "points": [
+        [
+          1.59,
+          0.04
+        ],
+        [
+          2.24,
+          -0.05
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.66
+    },
+    {
+      "id": "wall_125",
+      "points": [
+        [
+          0.17,
+          5.35
+        ],
+        [
+          0.05,
+          6.32
+        ]
+      ],
+      "thickness": 0.164,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.98
+    },
+    {
+      "id": "wall_126",
+      "points": [
+        [
+          -7.05,
+          0.39
+        ],
+        [
+          -7.46,
+          0.34
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.41
+    },
+    {
+      "id": "wall_127",
+      "points": [
+        [
+          -4.38,
+          6.81
+        ],
+        [
+          -6.48,
+          6.58
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.11
+    },
+    {
+      "id": "wall_128",
+      "points": [
+        [
+          1.93,
+          4.5
+        ],
+        [
+          1.59,
+          4.41
+        ]
+      ],
+      "thickness": 0.173,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.35
+    },
+    {
+      "id": "wall_129",
+      "points": [
+        [
+          4.21,
+          8.01
+        ],
+        [
+          5.07,
+          8.01
+        ]
+      ],
+      "thickness": 0.076,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.86
+    },
+    {
+      "id": "wall_131",
+      "points": [
+        [
+          -6.33,
+          3.68
+        ],
+        [
+          -6.89,
+          3.65
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.57
+    },
+    {
+      "id": "wall_132",
+      "points": [
+        [
+          0.22,
+          5.38
+        ],
+        [
+          -0.02,
+          7.56
+        ]
+      ],
+      "thickness": 0.091,
+      "rooms": [],
+      "is_outer": false,
+      "length": 2.19
+    },
+    {
+      "id": "wall_135",
+      "points": [
+        [
+          -5.49,
+          0.35
+        ],
+        [
+          -4.93,
+          0.3
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.57
+    },
+    {
+      "id": "wall_136",
+      "points": [
+        [
+          1.02,
+          2.73
+        ],
+        [
+          1.34,
+          2.7
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.33
+    },
+    {
+      "id": "wall_137",
+      "points": [
+        [
+          2.39,
+          4.59
+        ],
+        [
+          3.12,
+          4.48
+        ]
+      ],
+      "thickness": 0.083,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.75
+    },
+    {
+      "id": "wall_139",
+      "points": [
+        [
+          -0.05,
+          1.54
+        ],
+        [
+          -0.12,
+          0.93
+        ]
+      ],
+      "thickness": 0.164,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.61
+    },
+    {
+      "id": "wall_141",
+      "points": [
+        [
+          5.03,
+          -0.05
+        ],
+        [
+          5.43,
+          -0.11
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.41
+    },
+    {
+      "id": "wall_142",
+      "points": [
+        [
+          4.53,
+          -0.03
+        ],
+        [
+          5.02,
+          -0.08
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.49
+    },
+    {
+      "id": "wall_143",
+      "points": [
+        [
+          -2.48,
+          0.53
+        ],
+        [
+          -2.55,
+          1.03
+        ]
+      ],
+      "thickness": 0.092,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.51
+    },
+    {
+      "id": "wall_144",
+      "points": [
+        [
+          -2.85,
+          0.61
+        ],
+        [
+          -2.53,
+          0.61
+        ]
+      ],
+      "thickness": 0.102,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.33
+    },
+    {
+      "id": "wall_145",
+      "points": [
+        [
+          -8.13,
+          0.39
+        ],
+        [
+          -7.65,
+          0.33
+        ]
+      ],
+      "thickness": 0.091,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.49
+    },
+    {
+      "id": "wall_146",
+      "points": [
+        [
+          2.41,
+          0.01
+        ],
+        [
+          2.84,
+          -0.05
+        ]
+      ],
+      "thickness": 0.082,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.43
+    },
+    {
+      "id": "wall_147",
+      "points": [
+        [
+          1.75,
+          2.75
+        ],
+        [
+          1.63,
+          1.39
+        ]
+      ],
+      "thickness": 0.08,
+      "rooms": [],
+      "is_outer": false,
+      "length": 1.37
+    },
+    {
+      "id": "wall_148",
+      "points": [
+        [
+          3.53,
+          -0.03
+        ],
+        [
+          3.05,
+          -0.03
+        ]
+      ],
+      "thickness": 0.081,
+      "rooms": [],
+      "is_outer": false,
+      "length": 0.48
+    }
+  ],
+  "openings": [],
+  "rooms": [
+    {
+      "id": "room_001",
+      "name": "Room 1",
+      "points": [
+        [
+          4.929999828338623,
+          7.96999979019165
+        ],
+        [
+          0.10999999940395355,
+          7.349999904632568
+        ],
+        [
+          0.27000001072883606,
+          5.449999809265137
+        ],
+        [
+          0.8500000238418579,
+          5.550000190734863
+        ],
+        [
+          0.9900000095367432,
+          4.53000020980835
+        ],
+        [
+          5.230000019073486,
+          4.829999923706055
+        ],
+        [
+          5.190000057220459,
+          5.570000171661377
+        ],
+        [
+          5.130000114440918,
+          5.610000133514404
+        ],
+        [
+          5.070000171661377,
+          5.429999828338623
+        ],
+        [
+          4.96999979019165,
+          5.989999771118164
+        ],
+        [
+          5.150000095367432,
+          5.989999771118164
+        ],
+        [
+          5.150000095367432,
+          6.110000133514404
+        ],
+        [
+          4.96999979019165,
+          6.269999980926514
+        ],
+        [
+          4.849999904632568,
+          7.489999771118164
+        ],
+        [
+          4.909999847412109,
+          7.590000152587891
+        ],
+        [
+          4.96999979019165,
+          7.550000190734863
+        ]
+      ],
+      "area": 14.08,
+      "perimeter": 17.6,
+      "label_xy": [
+        2.75,
+        6.21
+      ],
+      "is_enclosed": true
+    },
+    {
+      "id": "room_004",
+      "name": "Room 4",
+      "points": [
+        [
+          -0.17000000178813934,
+          7.210000038146973
+        ],
+        [
+          -2.7100000381469727,
+          6.889999866485596
+        ],
+        [
+          -2.5899999141693115,
+          5.230000019073486
+        ],
+        [
+          -2.2899999618530273,
+          5.230000019073486
+        ],
+        [
+          -2.4100000858306885,
+          5.349999904632568
+        ],
+        [
+          -2.369999885559082,
+          5.409999847412109
+        ],
+        [
+          -2.190000057220459,
+          5.289999961853027
+        ],
+        [
+          -2.049999952316284,
+          5.349999904632568
+        ],
+        [
+          -2.109999895095825,
+          5.25
+        ],
+        [
+          -0.33000001311302185,
+          5.389999866485596
+        ],
+        [
+          -0.3700000047683716,
+          5.650000095367432
+        ],
+        [
+          -0.17000000178813934,
+          5.730000019073486
+        ],
+        [
+          -0.009999999776482582,
+          5.590000152587891
+        ],
+        [
+          -0.07000000029802322,
+          5.429999828338623
+        ],
+        [
+          0.05000000074505806,
+          5.429999828338623
+        ]
+      ],
+      "area": 4.32,
+      "perimeter": 10.37,
+      "label_xy": [
+        -1.32,
+        6.19
+      ],
+      "is_enclosed": true
+    },
+    {
+      "id": "room_007",
+      "name": "Room 7",
+      "points": [
+        [
+          -2.950000047683716,
+          6.909999847412109
+        ],
+        [
+          -8.350000381469727,
+          6.230000019073486
+        ],
+        [
+          -8.3100004196167,
+          5.75
+        ],
+        [
+          -8.229999542236328,
+          5.789999961853027
+        ],
+        [
+          -8.069999694824219,
+          4.570000171661377
+        ],
+        [
+          -8.050000190734863,
+          4.289999961853027
+        ],
+        [
+          -8.09000015258789,
+          4.230000019073486
+        ],
+        [
+          -8.149999618530273,
+          4.269999980926514
+        ],
+        [
+          -8.109999656677246,
+          3.630000114440918
+        ],
+        [
+          -2.7100000381469727,
+          3.950000047683716
+        ]
+      ],
+      "area": 15.26,
+      "perimeter": 17.33,
+      "label_xy": [
+        -5.44,
+        5.2
+      ],
+      "is_enclosed": true
+    },
+    {
+      "id": "room_014",
+      "name": "Room 14",
+      "points": [
+        [
+          0.7900000214576721,
+          5.349999904632568
+        ],
+        [
+          -2.6700000762939453,
+          5.070000171661377
+        ],
+        [
+          -2.509999990463257,
+          2.609999895095825
+        ],
+        [
+          -2.430000066757202,
+          2.5899999141693115
+        ],
+        [
+          -2.4700000286102295,
+          2.490000009536743
+        ],
+        [
+          -2.509999990463257,
+          2.549999952316284
+        ],
+        [
+          -2.490000009536743,
+          2.3499999046325684
+        ],
+        [
+          -2.1700000762939453,
+          2.3499999046325684
+        ],
+        [
+          -2.130000114440918,
+          2.4100000858306885
+        ],
+        [
+          -2.069999933242798,
+          2.390000104904175
+        ],
+        [
+          -2.109999895095825,
+          2.3499999046325684
+        ],
+        [
+          -0.10999999940395355,
+          2.369999885559082
+        ],
+        [
+          -0.09000000357627869,
+          2.7100000381469727
+        ],
+        [
+          -0.029999999329447746,
+          2.75
+        ],
+        [
+          0.9700000286102295,
+          2.7699999809265137
+        ]
+      ],
+      "area": 9.7,
+      "perimeter": 13.3,
+      "label_xy": [
+        -0.86,
+        3.85
+      ],
+      "is_enclosed": true
+    },
+    {
+      "id": "room_016",
+      "name": "Room 16",
+      "points": [
+        [
+          5.269999980926514,
+          4.590000152587891
+        ],
+        [
+          1.0099999904632568,
+          4.289999961853027
+        ],
+        [
+          1.090000033378601,
+          2.7699999809265137
+        ],
+        [
+          1.809999942779541,
+          2.75
+        ],
+        [
+          1.8300000429153442,
+          0.05000000074505806
+        ],
+        [
+          5.389999866485596,
+          0.009999999776482582
+        ],
+        [
+          5.389999866485596,
+          0.5699999928474426
+        ],
+        [
+          5.269999980926514,
+          0.7099999785423279
+        ],
+        [
+          5.269999980926514,
+          2.0299999713897705
+        ],
+        [
+          5.329999923706055,
+          2.069999933242798
+        ],
+        [
+          5.369999885559082,
+          2.009999990463257
+        ],
+        [
+          5.369999885559082,
+          2.950000047683716
+        ],
+        [
+          5.230000019073486,
+          3.130000114440918
+        ],
+        [
+          5.170000076293945,
+          4.409999847412109
+        ],
+        [
+          5.230000019073486,
+          4.449999809265137
+        ],
+        [
+          5.269999980926514,
+          4.389999866485596
+        ]
+      ],
+      "area": 16.81,
+      "perimeter": 18.2,
+      "label_xy": [
+        3.42,
+        2.32
+      ],
+      "is_enclosed": true
+    },
+    {
+      "id": "room_019",
+      "name": "Room 19",
+      "points": [
+        [
+          -2.6700000762939453,
+          3.8299999237060547
+        ],
+        [
+          -8.09000015258789,
+          3.509999990463257
+        ],
+        [
+          -8.09000015258789,
+          2.9700000286102295
+        ],
+        [
+          -7.96999979019165,
+          2.930000066757202
+        ],
+        [
+          -7.96999979019165,
+          2.7699999809265137
+        ],
+        [
+          -8.069999694824219,
+          2.690000057220459
+        ],
+        [
+          -7.96999979019165,
+          2.690000057220459
+        ],
+        [
+          -7.869999885559082,
+          1.3700000047683716
+        ],
+        [
+          -7.909999847412109,
+          1.2100000381469727
+        ],
+        [
+          -8.010000228881836,
+          1.2699999809265137
+        ],
+        [
+          -8.010000228881836,
+          0.4300000071525574
+        ],
+        [
+          -2.869999885559082,
+          0.3499999940395355
+        ],
+        [
+          -2.869999885559082,
+          0.6499999761581421
+        ],
+        [
+          -2.569999933242798,
+          0.6899999976158142
+        ]
+      ],
+      "area": 17.48,
+      "perimeter": 18.25,
+      "label_xy": [
+        -5.26,
+        2.03
+      ],
+      "is_enclosed": true
+    },
+    {
+      "id": "room_020",
+      "name": "Room 20",
+      "points": [
+        [
+          1.5700000524520874,
+          2.6700000762939453
+        ],
+        [
+          0.029999999329447746,
+          2.630000114440918
+        ],
+        [
+          0.029999999329447746,
+          -0.009999999776482582
+        ],
+        [
+          1.5299999713897705,
+          -0.029999999329447746
+        ],
+        [
+          1.4700000286102295,
+          0.07000000029802322
+        ],
+        [
+          1.590000033378601,
+          0.15000000596046448
+        ],
+        [
+          1.6299999952316284,
+          2.490000009536743
+        ]
+      ],
+      "area": 4.23,
+      "perimeter": 8.63,
+      "label_xy": [
+        0.81,
+        1.32
+      ],
+      "is_enclosed": true
+    },
+    {
+      "id": "room_021",
+      "name": "Room 21",
+      "points": [
+        [
+          -1.850000023841858,
+          2.0899999141693115
+        ],
+        [
+          -1.9700000286102295,
+          2.2100000381469727
+        ],
+        [
+          -2.4700000286102295,
+          2.2100000381469727
+        ],
+        [
+          -2.450000047683716,
+          0.6499999761581421
+        ],
+        [
+          -2.3499999046325684,
+          0.5699999928474426
+        ],
+        [
+          -2.4700000286102295,
+          0.5099999904632568
+        ],
+        [
+          -2.490000009536743,
+          0.20999999344348907
+        ],
+        [
+          -6.650000095367432,
+          0.23000000417232513
+        ],
+        [
+          -6.730000019073486,
+          0.1899999976158142
+        ],
+        [
+          -6.829999923706055,
+          -0.09000000357627869
+        ],
+        [
+          -6.789999961853027,
+          -0.6899999976158142
+        ],
+        [
+          -6.949999809265137,
+          -1.1299999952316284
+        ],
+        [
+          -1.8700000047683716,
+          -1.1299999952316284
+        ],
+        [
+          -1.850000023841858,
+          0.8899999856948853
+        ],
+        [
+          -1.8700000047683716,
+          0.949999988079071
+        ],
+        [
+          -2.0899999141693115,
+          0.8500000238418579
+        ],
+        [
+          -2.190000057220459,
+          0.9100000262260437
+        ],
+        [
+          -2.2699999809265137,
+          1.1100000143051147
+        ],
+        [
+          -2.2699999809265137,
+          1.5499999523162842
+        ],
+        [
+          -2.1500000953674316,
+          1.9299999475479126
+        ],
+        [
+          -2.2100000381469727,
+          2.0899999141693115
+        ],
+        [
+          -2.0899999141693115,
+          2.109999895095825
+        ],
+        [
+          -1.9500000476837158,
+          1.9900000095367432
+        ],
+        [
+          -1.9500000476837158,
+          1.7100000381469727
+        ],
+        [
+          -1.9299999475479126,
+          2.0299999713897705
+        ],
+        [
+          -1.8700000047683716,
+          2.0299999713897705
+        ],
+        [
+          -1.850000023841858,
+          1.850000023841858
+        ]
+      ],
+      "area": 7.7,
+      "perimeter": 19.2,
+      "label_xy": [
+        -4.12,
+        -0.28
+      ],
+      "is_enclosed": true
+    },
+    {
+      "id": "room_022",
+      "name": "Room 22",
+      "points": [
+        [
+          -1.7100000381469727,
+          2.069999933242798
+        ],
+        [
+          -1.7300000190734863,
+          -1.1299999952316284
+        ],
+        [
+          -0.27000001072883606,
+          -1.1299999952316284
+        ],
+        [
+          -0.20999999344348907,
+          1.090000033378601
+        ],
+        [
+          -0.4300000071525574,
+          1.0499999523162842
+        ],
+        [
+          -0.49000000953674316,
+          1.2100000381469727
+        ],
+        [
+          -0.6700000166893005,
+          1.3300000429153442
+        ],
+        [
+          -0.6499999761581421,
+          1.7699999809265137
+        ],
+        [
+          -0.550000011920929,
+          1.7899999618530273
+        ],
+        [
+          -0.4699999988079071,
+          2.009999990463257
+        ],
+        [
+          -0.5299999713897705,
+          2.0899999141693115
+        ]
+      ],
+      "area": 4.42,
+      "perimeter": 9.86,
+      "label_xy": [
+        -1.02,
+        0.38
+      ],
+      "is_enclosed": true
+    }
+  ],
+  "frame": {
+    "origin_x": -9.22,
+    "origin_y": -1.14,
+    "pixel_m": 0.02,
+    "width": 766,
+    "height": 481
+  },
+  "metadata": {
+    "method": "rect_decompose",
+    "n_rects": 149,
+    "wall_px": 21759,
+    "wall_clean_px": 21732
+  }
+}

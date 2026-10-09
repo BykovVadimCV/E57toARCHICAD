@@ -229,7 +229,8 @@ def build_angle_list(
     if axis_only:
         return [0.0, 90.0]
     uniform = [i * 180.0 / angle_steps for i in range(angle_steps)]
-    fine = [pca + pca_spread * (k / (n_pca_fine - 1) - 0.5)
+    pca_ang = pca_angle(remaining)
+    fine = [pca_ang + pca_spread * (k / (n_pca_fine - 1) - 0.5)
             for k in range(n_pca_fine)]
     candidates = list(uniform) + list(fine)
     if axis_gap > 0.0:

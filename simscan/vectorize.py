@@ -634,14 +634,15 @@ def vectorize(pred_dir: Path, log=print) -> VectorPlan:
     log("  Running rect decomposition...")
     rects = rd.decompose(
         wall_clean,
-        angle_steps=12,
+        angle_steps=24,
         rect_penalty=0.0,
         max_grid_dim=200,
         coverage_stop=0.93,
         bleed_weight=15.0,
         initial_bleed_weight=15.0,
         bleed_decay=0.0,
-        axis_only=True,
+        axis_only=False,  # Allow diagonals
+        axis_gap=5.0,     # Prefer 0/45/90/135 but allow others
         max_overlap=1.0,
         max_spill_fraction=0.15,
         refine=True,
@@ -660,6 +661,34 @@ def vectorize(pred_dir: Path, log=print) -> VectorPlan:
     # Filter short walls
     walls = [w for w in walls if w.length >= 0.30]
     log(f"  Walls after length filter (≥0.30m): {len(walls)}")
+
+    # Filter walls that overlap with windows (exterior walls mistaken as interior)
+    if window_mask.any():
+        walls_filtered = []
+        window_dilated = cv2.dilate(window_mask.astype(np.uint8), np.ones((5, 5), np.uint8), iterations=2)
+
+        for wall in walls:
+            # Sample points along wall centerline
+            p1 = np.array(wall.points[0])
+            p2 = np.array(wall.points[1])
+            n_samples = max(3, int(np.linalg.norm(p2 - p1) / (px_m * 5)))
+            samples_world = np.linspace(p1, p2, n_samples)
+            samples_px = world_to_px(samples_world, frame).astype(int)
+
+            # Check if samples overlap with dilated window mask
+            overlap_count = 0
+            for j, i in samples_px:
+                if 0 <= i < H and 0 <= j < W:
+                    if window_dilated[i, j]:
+                        overlap_count += 1
+
+            # Keep wall only if < 50% of samples overlap with windows
+            if overlap_count / n_samples < 0.5:
+                walls_filtered.append(wall)
+
+        if len(walls_filtered) < len(walls):
+            log(f"  Filtered {len(walls) - len(walls_filtered)} walls overlapping windows")
+            walls = walls_filtered
 
     # Merge collinear segments
     walls = merge_collinear_walls(walls, angle_tol=5.0, dist_tol_m=0.15, gap_tol_m=0.20)
@@ -801,13 +830,13 @@ def save_png(plan: VectorPlan, path: Path, dpi: int = 100):
     # Draw walls
     for wall in plan.walls:
         p1, p2 = wall.points
-        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], 'k-', linewidth=wall.thickness * 100, solid_capstyle='round')
+        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], 'k-', linewidth=wall.thickness * 100, solid_capstyle='butt')
 
     # Draw openings
     for opening in plan.openings:
         a, b = opening.a, opening.b
         color = '#e74c3c' if opening.opening_type == "door" else '#3498db'
-        ax.plot([a[0], b[0]], [a[1], b[1]], color=color, linewidth=2, solid_capstyle='round')
+        ax.plot([a[0], b[0]], [a[1], b[1]], color=color, linewidth=2, solid_capstyle='butt')
 
     # Set bounds
     all_pts = [p for w in plan.walls for p in w.points]
