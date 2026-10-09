@@ -1,0 +1,47 @@
+# Синтетика «как у заказчика»: BLK360 по измерениям (blk360_measured.yaml), 60% квартир под отделку
+# (как реальные объекты), 40% - жилые с мебелью и шторами, чтобы сеть не путала мебель со стенами.
+# Тепловая карта и вход сети на такой синтетике похожи на реальные: радиаторы и подоконники у
+# окон, короба и стояки, строительный мусор, шторы, открытые полотна, неровная штукатурка,
+# скользящие углы от частых стоянок. Смешанные точки - только моделью пятна луча (beam_model,
+# порог эха 1,4 м по измерениям); эвристику mixed_pixels не включать: без ограничения длины она
+# тянет точки от кромки до дальней стены через всю комнату.
+#
+#   python -m simscan generate --config configs/customer_like.yaml --count 100 --out out
+layout:
+  p_duplex: 0.25                 # двухуровневые квартиры: лестница, проём в перекрытии (класс 7)
+  duplex_p_spiral: 0.15
+scanner:
+  angular_step_deg: 0.1          # 0,0667 у BLK360; 0,1 - быстрее, плотность в растре 2 см та же
+  elevation_min_deg: -60.0
+  elevation_max_deg: 90.0
+  min_range_m: 0.4
+  max_range_m: 60.0
+  height_m: [1.10, 1.15]
+  tilt_sigma_deg: 0.05
+  stations_per_m2: 0.17          # у заказчика 14 стоянок на ~80 м2
+  max_stations_per_room: 4
+effects:
+  range_sigma_mm: [0.35, 0.45]
+  range_sigma_per_m_mm: [0.0, 0.015]
+  incidence_noise_power: 1.0
+  beam_divergence_mrad: [0.50, 0.60]
+  beam_exit_mm: 1.1
+  noise_cap_x_base: 40.0
+  grazing_start_deg: 82.0
+  echo_separation_m: 1.4
+  mixed_pixels: false
+  people: false
+  registration_sigma_mm: [2.0, 6.0]   # толщина линии стены 4,4 см у заказчика против 3,7 при (1, 4)
+interior:
+  p_bare: 0.6                    # квартиры под отделку, как у заказчика; остальные - с мебелью для общности
+  mess: [0.3, 1.0]
+  radiators: true
+  p_soffit: 0.4
+  p_risers: 0.9
+realism:
+  wall_unevenness_mm: [6.0, 14.0]   # также неровность пола: 14 мм у заказчика
+  unevenness_corr_m: [0.15, 0.5]   # короткие волны толщат линию стены в плане
+  lean_mm_per_m: [0.0, 8.0]
+  shear_deg_sigma: 1.0
+export:
+  preview: false

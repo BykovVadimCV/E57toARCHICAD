@@ -1,0 +1,233 @@
+# Конфигурация simscan по умолчанию (python -m simscan dump-config).
+# Описание параметров - в simscan/config.py.
+layout:
+  source: apartment
+  datasetgen_path: ''
+  datasetgen_strategies:
+  - central
+  - linear
+  - radial
+  - graph
+  - open_plan
+  - asymmetric
+  - courtyard
+  - spine
+  datasetgen_long_side_m:
+  - 8.0
+  - 16.0
+  datasetgen_min_room_m2: 0.5
+  datasetgen_balcony_probability: 0.7
+  parapet_height_m:
+  - 1.0
+  - 1.1
+  apartment_cell_m: 0.3
+  apartment_candidates: 40
+  apartment_shell_trials: 30
+  apartment_zone_trials: 12
+  apartment_keep_best_of: 5
+  apartment_facade_weights:
+  - 0.5
+  - 0.25
+  - 0.25
+  apartment_p_cut: 0.3
+  apartment_p_loggia: 0.6
+  apartment_p_glazed_loggia: 0.5
+  apartment_party_wall_m:
+  - 0.16
+  - 0.18
+  - 0.2
+  - 0.24
+  apartment_p_bearing_wall: 0.5
+  parapet_thickness_m: 0.12
+  footprint_x_m:
+  - 6.0
+  - 16.0
+  footprint_y_m:
+  - 5.0
+  - 12.0
+  rooms:
+  - 3
+  - 9
+  min_room_side_m: 1.6
+  snap_m: 0.05
+  p_l_shape: 0.35
+  ceiling_height_m:
+  - 2.5
+  - 3.3
+  exterior_wall_m:
+  - 0.3
+  - 0.38
+  - 0.4
+  - 0.5
+  - 0.6
+  interior_wall_m:
+  - 0.08
+  - 0.1
+  - 0.12
+  - 0.12
+  - 0.16
+  - 0.2
+  - 0.25
+  door_width_m:
+  - 0.7
+  - 0.9
+  door_head_m:
+  - 2.0
+  - 2.1
+  door_margin_m: 0.3
+  p_extra_door: 0.25
+  p_passage: 0.1
+  passage_width_m:
+  - 0.8
+  - 1.6
+  passage_head_m:
+  - 2.0
+  - 2.4
+  p_entrance: 1.0
+  entrance_width_m:
+  - 0.9
+  - 1.0
+  window_width_m:
+  - 0.6
+  - 1.8
+  window_sill_m:
+  - 0.6
+  - 0.9
+  window_head_m:
+  - 2.0
+  - 2.3
+  window_margin_m: 0.4
+  p_window_per_side: 0.75
+  min_window_room_area_m2: 5.0
+  p_suspended_ceiling: 0.15
+  suspended_drop_m:
+  - 0.1
+  - 0.35
+interior:
+  furniture: true
+  furniture_per_m2: 0.12
+  p_dark_furniture: 0.2
+  p_wardrobe_to_ceiling: 0.3
+  p_closed_door: 0.2
+  door_open_deg:
+  - 20.0
+  - 110.0
+  radiators: true
+  baseboards: true
+  p_soffit: 0.12
+  p_column: 0.25
+  column_min_area_m2: 15.0
+  p_pilaster: 0.15
+  p_mirror_bath: 0.7
+  p_mirror_other: 0.05
+  clutter_per_m2: 0.05
+  procedural: true
+  p_curtains: 0.6
+  p_tulle: 0.5
+  tulle_transmit:
+  - 0.4
+  - 0.8
+  door_frames: true
+  p_risers: 0.8
+  p_plants: 0.3
+  p_wall_decor: 0.4
+  lamps: true
+  asset_dir: ''
+  p_asset: 0.5
+  exterior_ground: true
+  ground_drop_m:
+  - 0.0
+  - 20.0
+  neighbour_buildings:
+  - 0
+  - 4
+realism:
+  enabled: true
+  tessellation_m: 0.3
+  wall_unevenness_mm:
+  - 1.0
+  - 4.0
+  unevenness_corr_m:
+  - 0.4
+  - 1.2
+  lean_mm_per_m:
+  - 0.0
+  - 3.0
+  shear_deg_sigma: 0.25
+  thickness_jitter_mm: 5.0
+scanner:
+  angular_step_deg: 0.12
+  elevation_min_deg: -60.0
+  elevation_max_deg: 90.0
+  min_range_m: 0.6
+  max_range_m: 60.0
+  height_m:
+  - 1.3
+  - 1.7
+  wall_clearance_m: 0.5
+  stations_per_m2: 0.05555555555555555
+  max_stations_per_room: 3
+  p_room_unscanned: 0.05
+  tilt_sigma_deg: 0.0
+  chunk_rays: 2000000
+effects:
+  range_noise: true
+  range_sigma_mm:
+  - 0.5
+  - 2.5
+  range_sigma_per_m_mm:
+  - 0.0
+  - 0.1
+  mixed_pixels: false
+  mixed_jump_m: 0.05
+  p_mixed:
+  - 0.2
+  - 0.6
+  grazing_dropout: true
+  grazing_start_deg: 75.0
+  grazing_full_deg: 89.0
+  low_signal_dropout: true
+  low_signal_snr0: 0.02
+  glass: true
+  p_glass_pass:
+  - 0.7
+  - 0.95
+  p_glass_return: 0.3
+  mirrors: true
+  registration_error: true
+  registration_sigma_mm:
+  - 1.0
+  - 4.0
+  registration_sigma_deg:
+  - 0.002
+  - 0.02
+  people: true
+  people_per_station:
+  - 0
+  - 2
+  keep_invalid: true
+  beam_model: true
+  beam_divergence_mrad:
+  - 0.3
+  - 0.6
+  beam_exit_mm: 3.0
+  echo_separation_m: 0.4
+  edge_jump_m: 0.01
+  incidence_noise_power: 1.0
+export:
+  pixel_mm: 10.0
+  pad_m: 0.5
+  cut_height_m: 1.25
+  world_yaw: true
+  world_offset_m:
+  - -500.0
+  - 500.0
+  world_z_offset_m:
+  - -50.0
+  - 150.0
+  write_merged: false
+  write_mesh: false
+  unet_mask: true
+  unet_target_wall_px: 30.0
+  preview: true
+  debug: false

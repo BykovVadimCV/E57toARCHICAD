@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dotcloudconvert"
+version = "0.1.0"
+description = "E57 -> 2D raster floor plan converter; simscan synthetic dataset generator"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.11",
+    "open3d>=0.18",
+    "pye57>=0.4.10",
+    "opencv-python-headless>=4.8",
+    "pyyaml>=6.0",
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+datasetgen = ["shapely>=2.0", "networkx>=3.0", "pydantic>=2.0"]
+debug = ["matplotlib>=3.8"]
+train = ["torch>=2.2"]
+
+[project.scripts]
+simscan = "simscan.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["simscan*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

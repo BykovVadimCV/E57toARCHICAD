@@ -1,0 +1,12 @@
+DotCloudCONVERT
+
+simscan/apartment.py contains code adapted from ProcTHOR
+(https://github.com/allenai/procthor), Copyright Allen Institute for AI,
+licensed under the Apache License, Version 2.0:
+  procthor/generation/floorplan_generation.py  (select_room, grow_rect,
+                                                grow_l_shape, expand_rooms,
+                                                recursive MetaRoom expansion)
+  procthor/generation/interior_boundaries.py    (corner cuts of the boundary)
+  procthor/generation/doors.py                  (door ordering rules)
+The algorithm follows Lopes et al., "A Constrained Growth Method for Procedural
+Floor Plan Generation" (2010).

@@ -1,0 +1,6 @@
+# Только для `python -m simscan inspect-e57` (анализ реального E57): без Open3D и pye57,
+# ставится на любом Python 3.10-3.14, в том числе на Intel-Mac.
+numpy>=1.24
+opencv-python-headless>=4.8
+matplotlib>=3.8
+pyyaml>=6.0

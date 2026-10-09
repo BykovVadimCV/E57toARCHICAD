@@ -1,0 +1,9 @@
+numpy>=2.0
+scipy>=1.11
+open3d>=0.18
+pye57>=0.4.10
+opencv-python-headless>=4.8
+pyyaml>=6.0
+pillow>=10.0
+pytest>=8.0
+matplotlib>=3.8
