@@ -1,0 +1,25 @@
+{
+ "source": "Barklaya_14_42.e57",
+ "level": "L2",
+ "floor_z": 2.919,
+ "ceiling_z": 5.699,
+ "frame": {
+  "origin_x": -12.56,
+  "origin_y": -1.68,
+  "pixel_m": 0.02,
+  "width": 683,
+  "height": 629
+ },
+ "pixel_to_world": [
+  [
+   0.02,
+   0.0,
+   -12.55
+  ],
+  [
+   0.0,
+   -0.02,
+   10.89
+  ]
+ ]
+}

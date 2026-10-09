@@ -1,0 +1,25 @@
+{
+ "source": "4012_Mikluhi-Maklaya-3-793.e57",
+ "level": "L1",
+ "floor_z": -0.02,
+ "ceiling_z": 3.0,
+ "frame": {
+  "origin_x": -9.22,
+  "origin_y": -1.14,
+  "pixel_m": 0.02,
+  "width": 766,
+  "height": 481
+ },
+ "pixel_to_world": [
+  [
+   0.02,
+   0.0,
+   -9.21
+  ],
+  [
+   0.0,
+   -0.02,
+   8.469999999999999
+  ]
+ ]
+}
