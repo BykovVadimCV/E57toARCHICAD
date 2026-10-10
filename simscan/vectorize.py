@@ -243,14 +243,18 @@ def merge_collinear_walls(
     angle_tol: float = 5.0,
     dist_tol_m: float = 0.15,
     gap_tol_m: float = 0.20,
+    back_to_back_tol_m: float = 0.40,
+    max_bleed_for_merge: float = 0.30,
 ) -> list[WallSegment]:
     """
-    Merge nearby collinear wall segments.
+    Merge nearby collinear wall segments, including back-to-back chains.
 
     Two segments merge if:
     - Angle difference < angle_tol
     - Perpendicular distance < dist_tol_m
-    - Axial gap < gap_tol_m
+    - Axial gap < gap_tol_m (for aligned walls) OR < back_to_back_tol_m (for back-to-back chains)
+
+    Back-to-back chains: adjacent parallel walls that should be merged if bleed is acceptable.
     """
     if len(walls) <= 1:
         return walls
@@ -290,6 +294,15 @@ def merge_collinear_walls(
             return w2_min - w1_max
         return 0.0
 
+    def can_merge_with_bleed(w1: WallSegment, w2: WallSegment, gap: float) -> bool:
+        """Check if back-to-back walls can merge considering bleed."""
+        # For back-to-back walls: estimate bleed as ratio of gap to combined length
+        total_length = w1.length + w2.length
+        if total_length < 1e-9:
+            return False
+        bleed_ratio = gap / total_length
+        return bleed_ratio <= max_bleed_for_merge
+
     merged = []
     used = set()
 
@@ -309,13 +322,21 @@ def merge_collinear_walls(
 
             if angle_diff > angle_tol:
                 continue
-            if perp_dist(w1, w2) > dist_tol_m:
-                continue
-            if axial_gap(w1, w2) > gap_tol_m:
+
+            pdist = perp_dist(w1, w2)
+            if pdist > dist_tol_m:
                 continue
 
-            group.append(w2)
-            used.add(j)
+            gap = axial_gap(w1, w2)
+
+            # Standard merge for aligned walls with small gap
+            if gap <= gap_tol_m:
+                group.append(w2)
+                used.add(j)
+            # Back-to-back merge for slightly larger gaps if bleed is acceptable
+            elif gap <= back_to_back_tol_m and can_merge_with_bleed(w1, w2, gap):
+                group.append(w2)
+                used.add(j)
 
         if len(group) == 1:
             merged.append(w1)
@@ -404,17 +425,26 @@ def extract_openings_from_semantic(
     ceiling_z: float,
     min_width_m: float = 0.40,
     max_wall_dist_m: float = 0.50,
+    min_door_width_m: float = 0.60,    # Doors need larger minimum width
+    min_window_width_m: float = 0.50,  # Windows need reasonable minimum width
 ) -> list[Opening]:
     """
     Extract openings from semantic door/window masks:
     1. Find connected components in each mask
     2. Compute bbox and associate with nearest wall
     3. Extract sill/head from heights tensor
+    4. Apply type-specific minimum width requirements (barrier length)
+
+    Doors and windows count as walls initially and are reclassified as openings
+    on top of walls. They need sufficient barrier length (rectangle width) to be added.
     """
     px_m = frame["pixel_m"]
     openings = []
 
     def process_mask(mask: np.ndarray, opening_type: str):
+        # Type-specific minimum width (barrier length)
+        type_min_width = min_door_width_m if opening_type == "door" else min_window_width_m
+
         n, labels, stats, centroids = cv2.connectedComponentsWithStats(
             mask.astype(np.uint8), connectivity=8
         )
@@ -433,11 +463,12 @@ def extract_openings_from_semantic(
             corners_px = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]])
             corners_world = px_to_world(corners_px, frame)
 
-            # Width = min side of bbox
+            # Width = min side of bbox (barrier length when opening becomes rectangle)
             w_px = min(stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT])
             width_m = w_px * px_m
 
-            if width_m < min_width_m:
+            # Apply type-specific minimum barrier length
+            if width_m < type_min_width:
                 continue
 
             # Centroid in world coords
@@ -630,7 +661,9 @@ def vectorize(pred_dir: Path, log=print) -> VectorPlan:
 
     log(f"  Wall after preprocessing: {int(wall_clean.sum())} px")
 
-    # Rect decomposition
+    # Rect decomposition with adaptive bleed weights
+    # Higher bleed weight for large walls (strict containment)
+    # Lower bleed weight for small walls (more permissive)
     log("  Running rect decomposition...")
     rects = rd.decompose(
         wall_clean,
@@ -638,9 +671,9 @@ def vectorize(pred_dir: Path, log=print) -> VectorPlan:
         rect_penalty=0.0,
         max_grid_dim=200,
         coverage_stop=0.85,  # Lower threshold: don't need to cover every pixel
-        bleed_weight=8.0,     # Lower penalty for going outside mask
-        initial_bleed_weight=8.0,
-        bleed_decay=0.0,
+        bleed_weight=3.0,     # Base penalty (for small walls) - reduced from 8.0
+        initial_bleed_weight=15.0,  # High penalty for large walls (strict containment)
+        bleed_decay=0.5,      # Gradual decay: large walls stay strict, small walls become permissive
         axis_only=False,  # Allow diagonals
         axis_gap=5.0,     # Prefer 0/45/90/135 but allow others
         max_overlap=1.0,
@@ -690,8 +723,15 @@ def vectorize(pred_dir: Path, log=print) -> VectorPlan:
             log(f"  Filtered {len(walls) - len(walls_filtered)} walls overlapping windows")
             walls = walls_filtered
 
-    # Merge collinear segments
-    walls = merge_collinear_walls(walls, angle_tol=5.0, dist_tol_m=0.15, gap_tol_m=0.20)
+    # Merge collinear segments including back-to-back chains
+    walls = merge_collinear_walls(
+        walls,
+        angle_tol=5.0,
+        dist_tol_m=0.15,
+        gap_tol_m=0.20,            # Standard gap tolerance for aligned walls
+        back_to_back_tol_m=0.40,   # Larger tolerance for back-to-back chains
+        max_bleed_for_merge=0.30,  # Accept up to 30% bleed ratio for merging chains
+    )
     log(f"  Walls after merging: {len(walls)}")
 
     # Snap endpoints
@@ -706,7 +746,7 @@ def vectorize(pred_dir: Path, log=print) -> VectorPlan:
 
     log(f"  Final walls: {len(walls)}")
 
-    # Extract openings
+    # Extract openings with type-specific minimum barrier lengths
     log("  Extracting openings...")
     openings = extract_openings_from_semantic(
         door_mask.astype(np.uint8),
@@ -715,8 +755,10 @@ def vectorize(pred_dir: Path, log=print) -> VectorPlan:
         walls,
         frame,
         ceiling_z,
-        min_width_m=0.40,
+        min_width_m=0.40,         # Legacy fallback
         max_wall_dist_m=0.50,
+        min_door_width_m=0.60,    # Doors need 60cm+ barrier length to be added
+        min_window_width_m=0.50,  # Windows need 50cm+ barrier length to be added
     )
 
     log(f"  Openings: {len(openings)} ({sum(1 for o in openings if o.opening_type=='door')} doors, "
