@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+runs/
+*.pt
+test_archicad_export/
