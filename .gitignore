@@ -10,3 +10,9 @@ dist/
 runs/
 *.pt
 test_archicad_export/
+
+# реальные объекты заказчика и результаты по ним - не в репозиторий
+TEST1/
+*_output/
+*.e57
+*_report.zip
