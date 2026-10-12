@@ -43,20 +43,28 @@ def predict(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 128, tta:
     """x [8, H, W] -> {"prob" [8,H,W], "dist" [1,H,W], "orient" [2,H,W], "heights" [2,H,W]}.
 
     tta=True: Test-Time Augmentation с усреднением по 4 вариантам (orig, flipH, flipV, flipHV).
-    Мягкое усреднение logits перед softmax, +1-2% IoU.
+    Мягкое усреднение logits перед softmax.
     """
-    import torch
-
     if not tta:
         return _predict_single(model, dev, x, tile, overlap)
 
-    # TTA: 4 варианта
-    variants = [
-        (x, lambda r: r),  # original
-        (np.flip(x, -1).copy(), lambda r: {k: np.flip(v, -1).copy() for k, v in r.items()}),  # flipH
-        (np.flip(x, -2).copy(), lambda r: {k: np.flip(v, -2).copy() for k, v in r.items()}),  # flipV
-        (np.flip(np.flip(x, -1), -2).copy(), lambda r: {k: np.flip(np.flip(v, -1), -2).copy() for k, v in r.items()}),  # flipHV
-    ]
+    # TTA: 4 варианта (fx, fy). Каждое отражение меняет знак sin 2θ (как _flip_x/_flip_y в
+    # torchdata), поэтому обратное отражение orient тоже меняет знак [1], иначе после
+    # усреднения sin 2θ гасится и косые стены сваливаются в 0° / 90°.
+    def _flip(a: np.ndarray, fx: bool, fy: bool) -> np.ndarray:
+        if fx:
+            a = np.flip(a, -1)
+        if fy:
+            a = np.flip(a, -2)
+        return a.copy()
+
+    def _reverse(r: dict, fx: bool, fy: bool) -> dict:
+        out = {k: _flip(v, fx, fy) for k, v in r.items()}
+        if fx != fy:
+            out["orient"][1] *= -1
+        return out
+
+    variants = [(fx, fy) for fy in (False, True) for fx in (False, True)]
 
     # Усреднить logits, не prob
     C, H, W = x.shape
@@ -65,9 +73,9 @@ def predict(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 128, tta:
     acc_orient = np.zeros((2, H, W), np.float32)
     acc_heights = np.zeros((2, H, W), np.float32)
 
-    for x_aug, reverse in variants:
-        r = _predict_single(model, dev, x_aug, tile, overlap, return_logits=True)
-        r = reverse(r)
+    for fx, fy in variants:
+        r = _predict_single(model, dev, _flip(x, fx, fy), tile, overlap, return_logits=True)
+        r = _reverse(r, fx, fy)
         acc_logits += r["logits"]
         acc_dist += r["dist"]
         acc_orient += r["orient"]

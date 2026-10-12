@@ -6,12 +6,13 @@
 
 Полный цикл: E57 скан → нейросеть → векторизация → **экспорт в IFC для ArchiCAD**.
 
-**Улучшения v2** (нейросеть + датасет):
-- Продвинутые аугментации: MixUp, CutMix, RandomErasing, ColorJitter
-- Weighted sampling для баланса классов → +1-2% IoU
-- Focal Loss для фокуса на сложных примерах → +1-2% IoU
+**Обучение** (опции, эффект на IoU не измерен):
+- Аугментации на растре: кроп, отражения и повороты на 90°, выпадение каналов, шум,
+  cutout (стёртая область = ignore в разметке)
+- Weighted sampling: чаще кропы с проёмами
+- Focal Loss
 - Gradient accumulation для больших эффективных batch
-- Test-Time Augmentation (TTA) → +1-2% IoU
+- Test-Time Augmentation (TTA): отражения с пересчётом ориентации
 
 ## Установка
 
@@ -340,16 +341,16 @@ python -m simscan dataset splits dataset
 # обучение (нужен torch; на Colab - notebooks/colab_train.ipynb)
 python -m simscan train --data dataset --out runs/r1 --epochs 60 --batch 8 [--resume]
 
-# обучение с улучшениями v2 (опциональные параметры для повышения точности):
+# опции обучения:
 python -m simscan train --data dataset --out runs/r2 --epochs 60 --batch 8 \
-    --weighted-sampling \        # баланс классов → +1-2% IoU для door/window
-    --use-focal \                # Focal Loss → +1-2% IoU для редких классов
+    --weighted-sampling \        # чаще кропы с дверями и окнами
+    --use-focal \                # Focal Loss
     --accum-steps 4 \            # gradient accumulation → эффективный batch=32
     [--resume]
 
 # применение к реальному E57 или к каталогам с input.npy
 python -m simscan infer runs/r1/best.pt kvartira.e57 --out pred
-python -m simscan infer runs/r1/best.pt kvartira.e57 --out pred --tta  # Test-Time Augmentation → +1-2% IoU
+python -m simscan infer runs/r1/best.pt kvartira.e57 --out pred --tta  # Test-Time Augmentation (4 отражения)
 ```
 
 `make-dataset` продолжает с места обрыва. Скан на диск не пишется: растр строится из памяти теми же
@@ -380,6 +381,8 @@ python -m simscan vectorize pred/kvartira/L1 --out vectors/L1
 
 # 3. Экспорт в IFC для ArchiCAD
 python -m simscan export-ifc vectors/L1/plan.json --out kvartira_L1.ifc
+# несколько уровней - этажи одного IFC
+python -m simscan export-ifc vectors/L1/plan.json vectors/L2/plan.json --out kvartira.ifc
 ```
 
 Векторизация растровых предсказаний:
@@ -389,12 +392,15 @@ python -m simscan export-ifc vectors/L1/plan.json --out kvartira_L1.ifc
 - Извлечение помещений (связные компоненты interior маски) → многоугольники с площадями
 - Извлечение проёмов (двери, окна) по классам сети, с высотами подоконников и перемычек
 
-IFC экспорт:
-- `IfcWall` для каждой стены с материалом и толщиной
-- `IfcDoor`, `IfcWindow` для проёмов с размерами
-- `IfcSpace` для помещений с площадями (`Pset_SpaceCommon.NetFloorArea`)
-- `IfcBuildingStorey` на отметке пола уровня
-- Совместимость: ArchiCAD 21+, Revit 2020+ (через IFC), BIMVision, Solibri
+IFC экспорт (IFC4, `ifcopenshell`):
+- `IfcBuildingStorey` на отметке пола уровня; высота стен и помещений - от пола до потолка уровня
+- `IfcWall` на каждый прямой участок оси: размещение в начале участка, ось X вдоль него,
+  представления Axis и Body, `IfcMaterialLayerSetUsage` (ось по середине толщины)
+- проём - `IfcOpeningElement`, вырезающий стену (`IfcRelVoidsElement`), и `IfcDoor` / `IfcWindow`
+  в нём (`IfcRelFillsElement`); низ и верх - из `plan.json` (`sill`, `head` от пола уровня)
+- `IfcSpace` с контуром и `Qto_SpaceBaseQuantities` (площадь, периметр, высота)
+- проверка: `tests/test_export_ifc.py` (схема IFC4 с правилами EXPRESS, геометрия, вырезы);
+  в ArchiCAD / Revit пока не проверялось
 
 
 ---
@@ -434,7 +440,7 @@ python e57_to_ifc.py
 **Минимальные** (только конвертация):
 ```bash
 pip install -r requirements-inspect.txt
-pip install torch pillow       # для шага inference и векторизации
+pip install torch pillow ifcopenshell   # inference, векторизация, экспорт IFC
 ```
 
 **Модель**: файл `best.pt` (обученная нейросеть)

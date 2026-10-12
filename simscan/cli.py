@@ -169,7 +169,7 @@ def main(argv: list[str] | None = None) -> None:
     vec.add_argument("pred_dir", help="каталог предсказаний (из infer): sem.png, dist.npy, ...")
     vec.add_argument("--out", required=True, help="каталог для векторного плана")
     exp = sub.add_parser("export-ifc", help="экспорт векторного плана в IFC для ArchiCAD")
-    exp.add_argument("plan_json", help="plan.json из vectorize")
+    exp.add_argument("plan_json", nargs="+", help="plan.json из vectorize (несколько - этажи одного IFC)")
     exp.add_argument("--out", required=True, help="выходной IFC файл (.ifc)")
     args = ap.parse_args(argv)
 

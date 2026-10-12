@@ -423,6 +423,7 @@ def extract_openings_from_semantic(
     walls: list[WallSegment],
     frame: dict,
     ceiling_z: float,
+    floor_z: float = 0.0,
     min_width_m: float = 0.40,
     max_wall_dist_m: float = 0.50,
     min_door_width_m: float = 0.60,    # Doors need larger minimum width
@@ -504,8 +505,10 @@ def extract_openings_from_semantic(
             if h_blob.shape[1] == 0:
                 sill, head = None, None
             else:
-                sill = float(np.median(h_blob[0]) * ceiling_z) if opening_type == "window" else 0.0
-                head = float(np.median(h_blob[1]) * ceiling_z)
+                # heights.npy - доли высоты помещения (netinput), от пола уровня
+                room_h = ceiling_z - floor_z
+                sill = float(np.median(h_blob[0]) * room_h) if opening_type == "window" else 0.0
+                head = float(np.median(h_blob[1]) * room_h)
 
             # Opening endpoints: project corners onto wall axis
             p1 = np.array(best_wall.points[0])
@@ -755,6 +758,7 @@ def vectorize(pred_dir: Path, log=print) -> VectorPlan:
         walls,
         frame,
         ceiling_z,
+        floor_z,
         min_width_m=0.40,         # Legacy fallback
         max_wall_dist_m=0.50,
         min_door_width_m=0.60,    # Doors need 60cm+ barrier length to be added

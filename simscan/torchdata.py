@@ -15,8 +15,9 @@ orient [2, h, w]; heights [2, h, w]; mask_orient, mask_heights [h, w] bool.
 
 Улучшения v2:
 - Multiplicative/additive noise на входные каналы
-- Random erasing (cutout) для робастности
-- Channel shuffle для инвариантности к высотным полосам
+- Random erasing (cutout): стёртая область во входе = ignore в разметке. Сеть не должна
+  достраивать то, чего скан не видел (ТЗ); тени от мебели и неотсканированные зоны
+  моделируются на облаке (симуляция сканера), а не здесь.
 - Weighted sampling: oversample сцены с проёмами (door/window малочисленны)
 """
 from __future__ import annotations
@@ -71,14 +72,14 @@ class FloorplanSamples:
     def __init__(self, root, split: str = "train", crop: int | None = 512, train: bool = True,
                  channel_dropout: float = 0.1, multiplicative_noise: float = 0.15,
                  additive_noise: float = 0.05, random_erasing: float = 0.3,
-                 channel_shuffle: float = 0.05, weighted_sampling: bool = True, seed: int = 0):
+                 weighted_sampling: bool = True, seed: int = 0):
         self.root = Path(root)
         self.meta = json.loads((self.root / "meta.json").read_text(encoding="utf-8"))
         f = self.root / "splits" / f"{split}.txt"
         self.items = [x for x in f.read_text(encoding="utf-8").split() if x] if f.exists() else []
         self.crop, self.train, self.p_drop = crop, train, channel_dropout
         self.mult_noise, self.add_noise = multiplicative_noise, additive_noise
-        self.p_erase, self.p_shuffle = random_erasing, channel_shuffle
+        self.p_erase = random_erasing
         self.weighted = weighted_sampling and train
         self.rng = np.random.default_rng(seed)
 
@@ -128,8 +129,11 @@ class FloorplanSamples:
             y, x = (H - C) // 2, (W - C) // 2
         return {k: v[..., y:y + C, x:x + C] for k, v in s.items()}
 
-    def _augment_input(self, inp: np.ndarray) -> np.ndarray:
-        """Продвинутые аугментации входа: noise, erasing, shuffle."""
+    def _augment(self, s: dict) -> dict:
+        """Шум на входе и cutout. Стёртое во входе - ignore в разметке (сеть не учится
+        достраивать невидимое). Каналы местами не меняются: occ_low / occ_mid - ровно тот
+        признак, по которому окно отличается от двери."""
+        inp = s["input"]
         C, H, W = inp.shape
 
         # 1. Multiplicative noise на каналы density и occ_* (0,1,2,5 - density тоже)
@@ -145,7 +149,7 @@ class FloorplanSamples:
             noise = self.rng.uniform(-self.add_noise, self.add_noise, (C, H, W)).astype(np.float32)
             inp = np.clip(inp + noise, 0, 1)
 
-        # 3. Random erasing (cutout): 1-2 прямоугольника
+        # 3. Random erasing (cutout): 1-2 прямоугольника, в разметке - ignore
         if self.p_erase > 0 and self.rng.random() < self.p_erase:
             n_holes = int(self.rng.integers(1, 3))
             for _ in range(n_holes):
@@ -160,12 +164,11 @@ class FloorplanSamples:
                 y = int(self.rng.integers(0, H - hole_h + 1)) if hole_h < H else 0
                 x = int(self.rng.integers(0, W - hole_w + 1)) if hole_w < W else 0
                 inp[:, y:y + hole_h, x:x + hole_w] = 0.0
+                if "sem" in s:
+                    s["sem"][y:y + hole_h, x:x + hole_w] = IGNORE
 
-        # 4. Channel shuffle: occ_low <-> occ_mid
-        if self.p_shuffle > 0 and self.rng.random() < self.p_shuffle and C >= 2:
-            inp[[0, 1]] = inp[[1, 0]]
-
-        return inp
+        s["input"] = inp
+        return s
 
     def __getitem__(self, idx: int) -> dict:
         s = load_level(self.root / "scenes" / self.items[idx])
@@ -181,8 +184,7 @@ class FloorplanSamples:
             # Channel dropout (старая аугментация)
             drop = self.rng.random(s["input"].shape[0]) < self.p_drop
             s["input"][drop] = 0.0
-            # Новые аугментации
-            s["input"] = self._augment_input(s["input"])
+            s = self._augment(s)
         if "sem" in s:
             sem = s["sem"]
             s["mask_orient"] = np.isin(sem, WALLISH)
