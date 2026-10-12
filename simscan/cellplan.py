@@ -1,8 +1,15 @@
 """План через разбиение на ячейки и глобальную разметку (indoor modelling / scan-to-BIM).
 
-    python -m simscan cellplan D:/scans/kvartira.e57 --out D:/plan
+    python -m simscan cellplan D:/scans/kvartira.e57 --out D:/plan [--pred pred/kvartira]
     -> plan.png (на уровень - plan_L1.png ...), cells.png (разбиение и разметка), walls.png
-       (развёртки стен с проёмами), elements.json
+       (развёртки стен с проёмами), elements.json, plan_L1.json ... (оси и толщины стен для
+       export-ifc)
+
+С --pred (каталог infer для этого файла: L1/prob.npz + scene.json ...) вероятности сети входят
+в задачу (раздел «Вероятности сети» ниже): кандидаты стен - объединение правил wallheat и
+стен / проёмов сети, данные ячейки - свидетельство пустоты вместе с вероятностью помещения,
+стоимость ребра каждого типа - вместе с вероятностью этого класса сети вдоль ребра. Без
+--pred - только правила wallheat.
 
 Вместо заливки помещений (протекает в разрывы, двери без перемычки не замыкает):
   1. срезы по 10 см, тепловая карта и разметка стена / дверь / окно / шум - wallheat;
@@ -184,6 +191,51 @@ def image_stations(path) -> np.ndarray:
 
 
 # ----------------------------------------------------------------------
+# Вероятности сети
+# ----------------------------------------------------------------------
+
+NET_SPACE = (1, 6)                                       # помещение, мебель и инженерия
+NET_EDGE = {"wall": 2, "door": 3, "window": 4, "gap": 5}  # тип ребра -> класс сети (netinput.CLASSES)
+
+
+def load_net(pred, level: dict, frame: dict, tol_z: float = 0.5) -> dict | None:
+    """prob.npz уровня из каталога infer (уровень - по ближайшей отметке пола, не дальше tol_z)
+    -> в кадр cellplan: {"prob" [8, H, W] float32, "valid" [H, W], "dir"}; None - нет уровня."""
+    import cv2
+
+    best = None
+    for sc in sorted(Path(pred).rglob("scene.json")):
+        if not (sc.parent / "prob.npz").exists():
+            continue
+        meta = json.loads(sc.read_text(encoding="utf-8"))
+        dz = abs(float(meta.get("floor_z", 0.0)) - float(level["floor_z"]))
+        if dz <= tol_z and (best is None or dz < best[0]):
+            best = (dz, sc.parent, meta)
+    if best is None:
+        return None
+    _, d, meta = best
+    prob = np.load(d / "prob.npz")["prob"].astype(np.float32)
+    M = np.asarray(meta["pixel_to_world"], float)             # (j, i, 1) -> мир (x, y)
+    H, W = frame["shape"]
+    px = frame["px"]
+    jj, ii = np.meshgrid(np.arange(W, dtype=np.float64), np.arange(H, dtype=np.float64))
+    xp = frame["origin"][0] + (jj + 0.5) * px                 # центр пикселя в СК плана
+    yp = frame["origin"][1] + (H - 1 - ii + 0.5) * px
+    a = math.radians(frame["rotation_deg"])                   # мир = Rz(rotation) * план
+    xw = math.cos(a) * xp - math.sin(a) * yp - M[0, 2]
+    yw = math.sin(a) * xp + math.cos(a) * yp - M[1, 2]
+    inv = np.linalg.inv(M[:, :2])
+    mx = (inv[0, 0] * xw + inv[0, 1] * yw).astype(np.float32)
+    my = (inv[1, 0] * xw + inv[1, 1] * yw).astype(np.float32)
+    out = np.stack([cv2.remap(c, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+                    for c in prob])
+    valid = cv2.remap(np.ones(prob.shape[1:], np.float32), mx, my, cv2.INTER_NEAREST,
+                      borderMode=cv2.BORDER_CONSTANT, borderValue=0) > 0.5
+    out[:, ~valid] = 0.0
+    return {"prob": out, "valid": valid, "dir": str(d)}
+
+
+# ----------------------------------------------------------------------
 # Затравки помещений
 # ----------------------------------------------------------------------
 
@@ -282,9 +334,11 @@ def edge_pixels(cells: np.ndarray, lines: np.ndarray) -> dict:
     return out
 
 
-def edge_profile(pix, cells: np.ndarray, F: dict, Fmax: dict, P, bin_m: float = 0.05, side_m: float = 0.25):
+def edge_profile(pix, cells: np.ndarray, F: dict, Fmax: dict, P, bin_m: float = 0.05, side_m: float = 0.25,
+                 N: dict | None = None):
     """Профиль ребра с шагом bin_m: занятость полос на ребре (±2 px), с каждой стороны -
-    пол или потолок виден, крапчатость. -> dict или None."""
+    пол или потолок виден, крапчатость; с сетью (N) - вероятности её классов на ребре
+    (n_wall, n_door, n_window, n_gap). -> dict или None."""
     ys, xs = pix
     H, W = cells.shape
     p = np.c_[xs, ys].astype(float)
@@ -304,6 +358,8 @@ def edge_profile(pix, cells: np.ndarray, F: dict, Fmax: dict, P, bin_m: float = 
     for name in ("low", "mid", "top"):
         v = np.bincount(k, Fmax[name][ys, xs], minlength=nb) / np.maximum(cnt, 1)
         prof[name] = v
+    for name in (NET_EDGE if N is not None else ()):
+        prof["n_" + name] = np.bincount(k, N[name][ys, xs], minlength=nb) / np.maximum(cnt, 1)
     centers = m + d * (t.min() + (np.arange(nb) + 0.5) * step)[:, None]
     # стороны: + нормаль и - нормаль; какая из них ячейка a - по большинству
     side = {}
@@ -350,7 +406,17 @@ def type_costs(pr: dict, ctx: str, out_side: int | None) -> dict:
         c["window"] = (1 - lo) + mi + (1 - tp) + 0.7 * fo + 0.3 * (1 - np.minimum(1, 3 * so))
         c["shadow"] = lo + mi + tp + 1.0 * fo + 0.3
         c["door"] = lo + mi + (1 - tp) + 0.5 * (1 - fa) + 0.5 * (1 - fb)
+    if "n_wall" in pr:                    # сеть: тип ребра дешевле там, где сеть видит его класс
+        w = pr.get("net_w", 1.0)
+        n_any = _net_any(pr)
+        for t in c:
+            c[t] = c[t] + w * (n_any if t == "shadow" else 1 - pr["n_" + t])
     return {k: v for k, v in c.items() if k in CONTEXT_TYPES[ctx]}
+
+
+def _net_any(pr: dict) -> np.ndarray:
+    """Вероятность сети «на ребре стена или проём» (тень и ложное продление - против неё)."""
+    return np.minimum(1.0, sum(pr["n_" + t] for t in NET_EDGE))
 
 
 def segment_edge(pr: dict, ctx: str, out_side: int | None, bin_m: float, tau: float = 0.15):
@@ -395,7 +461,10 @@ def same_cost(pr: dict, bin_m: float) -> float:
     """Ребро внутри одного помещения - ложное продление: вдоль него ничего нет. Верх весит
     0,3: короб или балка под потолком внутри комнаты допустимы (иначе короб режет комнату
     как перемычка)."""
-    return float(np.sum(pr["low"] + pr["mid"] + 0.3 * pr["top"]) * bin_m)
+    c = pr["low"] + pr["mid"] + 0.3 * pr["top"]
+    if "n_wall" in pr:
+        c = c + pr.get("net_w", 1.0) * _net_any(pr)
+    return float(np.sum(c) * bin_m)
 
 
 # ----------------------------------------------------------------------
@@ -484,7 +553,7 @@ def joint_labels(D: np.ndarray, allowed: np.ndarray, E: list, time_limit: float 
 
 def analyse_level(L: dict, A: dict, frame: dict, stations_px: np.ndarray, k: int, bin_m: float = 0.05,
                   tol_m: float = 0.012, min_room_m2: float = 1.0, seed_m: float = 0.35, room_core_m: float = 0.6,
-                  log=print):
+                  net: dict | None = None, net_w: float = 1.0, log=print):
     import cv2
 
     from .floorplan import LevelPlan, Opening, Room, WallSegment, _room_outline
@@ -502,8 +571,16 @@ def analyse_level(L: dict, A: dict, frame: dict, stations_px: np.ndarray, k: int
     F = pixel_features(L, occ, zc)
     Fmax = {n: cv2.dilate(F[n], k5) for n in ("low", "mid", "top", "floor", "ceil")}
 
+    N = None
+    walls = (lab == WALL) | (lab == DOOR)
+    if net is not None:                                   # сеть: стены и проёмы - тоже кандидаты
+        npr = net["prob"]
+        N = {t: cv2.dilate(npr[c], k5) for t, c in NET_EDGE.items()}
+        n_space = npr[list(NET_SPACE)].sum(0)
+        walls |= npr[[NET_EDGE["wall"], NET_EDGE["door"], NET_EDGE["window"]]].sum(0) > 0.5
+
     # --- шаг 2: кандидаты, разбиение, профили рёбер -------------------------------------------------
-    walls = cv2.morphologyEx(((lab == WALL) | (lab == DOOR)).astype(np.uint8), cv2.MORPH_CLOSE, k3)
+    walls = cv2.morphologyEx(walls.astype(np.uint8), cv2.MORPH_CLOSE, k3)
     cands = wall_candidates(walls, P, max(tol_m / px, 0.6))
     polys = extend_candidates(cands, (H, W), 1e9)
     cells, lines, nc = arrangement(polys, (H, W))
@@ -517,6 +594,11 @@ def analyse_level(L: dict, A: dict, frame: dict, stations_px: np.ndarray, k: int
     empty = (F["floor"] > 0) | (F["ceil"] > 0) | vis
     area = np.bincount(cells.ravel(), minlength=nc).astype(float)
     f_empty = np.bincount(cells.ravel(), empty.ravel(), minlength=nc) / np.maximum(area, 1)
+    f_room = f_empty                                      # свидетельство «помещение»
+    if net is not None:                                   # вместе с вероятностью помещения у сети
+        f_nv = np.bincount(cells.ravel(), net["valid"].ravel(), minlength=nc) / np.maximum(area, 1)
+        f_space = np.bincount(cells.ravel(), n_space.ravel(), minlength=nc) / np.maximum(area * f_nv, 1)
+        f_room = np.where(f_nv > 0.5, (f_empty + net_w * f_space) / (1 + net_w), f_empty)
     space = (empty & ~cv2.dilate(walls, k3).astype(bool)).astype(np.uint8)
     space = cv2.morphologyEx(space, cv2.MORPH_OPEN, k3)
     seeds = room_seeds(space, P(room_core_m), P(seed_m), min_area_px=0.3 / (px * px))
@@ -536,12 +618,12 @@ def analyse_level(L: dict, A: dict, frame: dict, stations_px: np.ndarray, k: int
     allowed[0, 1:] = False                               # 0 - пиксели линий, не ячейка
     A_m2 = area * px * px
     D = np.zeros((nc, nl))
-    D[:, OUT] = A_m2 * 1.5 * f_empty
+    D[:, OUT] = A_m2 * 1.5 * f_room
     seed_any = seed_frac[:, 1:].sum(1)
     for li in range(1, nl):
         # штраф - только за долю чужой затравки: ничья пустота (ниша, полоса у стены) идёт к
         # соседнему помещению по свидетельству пустоты
-        D[:, li] = A_m2 * ((1 - f_empty) + 0.5 * (seed_any - seed_frac[:, li]))
+        D[:, li] = A_m2 * ((1 - f_room) + 0.5 * (seed_any - seed_frac[:, li]))
     D[0] = 0
 
     # --- профили и стоимости рёбер ---------------------------------------------------------------
@@ -550,9 +632,10 @@ def analyse_level(L: dict, A: dict, frame: dict, stations_px: np.ndarray, k: int
     for (a, b), pix in epix.items():
         if not (can_room[a] or can_room[b]):
             continue
-        pr = edge_profile(pix, cells, F, Fmax, P, bin_m)
+        pr = edge_profile(pix, cells, F, Fmax, P, bin_m, N=N)
         if pr is None:
             continue
+        pr["net_w"] = net_w
         pr["bin_m"] = pr["step"] * px                   # фактическая длина бина (шаг округлён до px)
         # сторона +нормали - ячейка a?
         sa = 1 if np.mean(pr["side"][1]["cell"] == a) >= np.mean(pr["side"][-1]["cell"] == a) else -1
@@ -653,7 +736,7 @@ def analyse_level(L: dict, A: dict, frame: dict, stations_px: np.ndarray, k: int
             outer = bool(exterior[np.clip(q[1], 0, H - 1), np.clip(q[0], 0, W - 1)])
         wi = len(walls_out)
         walls_out.append({"a": p0, "b": p1, "rooms": rooms_here, "ctx": ctx, "outer": outer, "segs": segs,
-                          "pr": pr, "out_side": out_side})
+                          "pr": pr, "out_side": out_side, "key": (a, b)})
         # развёртка по срезам: занятость в ±2 px от ребра
         ys, xs = epix[(a, b)]
         tt = (np.c_[xs, ys] - pr["m"]) @ pr["d"]
@@ -725,9 +808,194 @@ def analyse_level(L: dict, A: dict, frame: dict, stations_px: np.ndarray, k: int
     cnts, _ = cv2.findContours(fill, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     plan.slab = [[to_m(p) for p in c[:, 0, :].astype(float)] for c in cnts if cv2.contourArea(c) * px * px >= 0.005]
     items = [(wall_id[wi], Ev, ops) for wi, Ev, ops in elev if wi in wall_id]
+    ifc = ifc_plan(plan, walls_out, wall_id, kept, epix, walls, P, px, to_m, room_id, frame)
     dbg = {"cells": cells, "lines": lines, "labels": lab_px, "polys": polys, "vis": vis, "free": empty,
-           "stations": stations_px, "seeds": seeds, "elevations": items, "features": F, "walls_out": walls_out}
+           "stations": stations_px, "seeds": seeds, "elevations": items, "features": F, "walls_out": walls_out,
+           "ifc_plan": ifc, "net": net is not None}
     return plan, dbg
+
+
+# ----------------------------------------------------------------------
+# Оси и толщины стен для IFC
+# ----------------------------------------------------------------------
+
+def _run(mask: np.ndarray, c: np.ndarray, o: np.ndarray, max_px: int, gap_px: int) -> int:
+    """Пикселей маски подряд от c по направлению o (начало - не дальше gap_px)."""
+    H, W = mask.shape
+    n, started = 0, False
+    for s in range(max_px):
+        x, y = np.round(c + o * s).astype(int)
+        if not (0 <= x < W and 0 <= y < H):
+            break
+        if mask[y, x]:
+            started = True
+            n += 1
+        elif started or s > gap_px:
+            break
+    return n
+
+
+def _axis_points(pix, pr: dict, offset: np.ndarray, P) -> np.ndarray:
+    """Ось стены: хорда ребра, сдвинутая на offset; ребро по дуге (отклонение > 3 см) -
+    ломаная по пикселям ребра со сдвигом по местной нормали."""
+    import cv2
+
+    ys, xs = pix
+    p = np.c_[xs, ys].astype(float)
+    t = (p - pr["m"]) @ pr["d"]
+    dev = np.abs((p - pr["m"]) @ pr["n"])
+    a, b = pr["m"] + pr["d"] * pr["t0"], pr["m"] + pr["d"] * pr["t1"]
+    if dev.max() <= P(0.03) or len(p) < 8:
+        return np.array([a + offset, b + offset])
+    step = max(1, P(0.05))
+    k = np.floor((t - t.min()) / step).astype(int)
+    cnt = np.bincount(k)
+    ok = cnt > 0
+    q = np.c_[np.bincount(k, p[:, 0])[ok] / cnt[ok], np.bincount(k, p[:, 1])[ok] / cnt[ok]]
+    q = cv2.approxPolyDP(q.astype(np.float32)[:, None], max(0.5, P(0.01)), False)[:, 0].astype(float)
+    off_len = float(np.linalg.norm(offset))
+    if off_len < 1e-9:
+        return q
+    sgn = offset / off_len
+    tang = np.gradient(q, axis=0)
+    nrm = np.c_[-tang[:, 1], tang[:, 0]]
+    nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-9)
+    nrm *= np.sign(nrm @ sgn)[:, None]
+    return q + nrm * off_len
+
+
+def _merge_axes(items: list, P, gap_m: float = 0.3) -> list:
+    """Две грани одной стены (видны из двух помещений) дают почти одну ось - одна стена; так же
+    соосные участки с зазором до gap_m (наружная стена, разрезанная примыкающей перегородкой).
+    Уже проёма зазор не бывает, поэтому настоящий проход так не закрывается."""
+    alive = [True] * len(items)
+    changed = True
+    while changed:
+        changed = False
+        for i, A in enumerate(items):
+            if not alive[i] or len(A["pts"]) != 2:
+                continue
+            a0, a1 = A["pts"]
+            u = (a1 - a0) / max(np.linalg.norm(a1 - a0), 1e-9)
+            nrm = np.array([-u[1], u[0]])
+            for j in range(i + 1, len(items)):
+                B = items[j]
+                if not alive[j] or len(B["pts"]) != 2:
+                    continue
+                b0, b1 = B["pts"]
+                v = (b1 - b0) / max(np.linalg.norm(b1 - b0), 1e-9)
+                if abs(u[0] * v[1] - u[1] * v[0]) > 0.05:
+                    continue
+                off = ((b0 + b1) / 2 - a0) @ nrm
+                if abs(off) > max(P(0.04), 0.25 * max(A["t"], B["t"])):
+                    continue
+                sa = sorted([0.0, (a1 - a0) @ u])
+                sb = sorted([(b0 - a0) @ u, (b1 - a0) @ u])
+                if min(sa[1], sb[1]) - max(sa[0], sb[0]) < -P(gap_m) or A["outer"] != B["outer"] and \
+                        min(sa[1], sb[1]) - max(sa[0], sb[0]) <= 0:
+                    continue
+                la, lb = sa[1] - sa[0], sb[1] - sb[0]
+                base = a0 + nrm * off * lb / (la + lb)
+                lo, hi = min(sa[0], sb[0]), max(sa[1], sb[1])
+                A["pts"] = np.array([base + u * lo, base + u * hi])
+                A["t"] = (A["t"] * la + B["t"] * lb) / (la + lb)
+                A["outer"] = A["outer"] or B["outer"]
+                A["rooms"] = sorted(set(A["rooms"]) | set(B["rooms"]))
+                A["src"] += B["src"]
+                alive[j] = False
+                changed = True
+                a0, a1 = A["pts"]
+    return [x for x, ok in zip(items, alive) if ok]
+
+
+def _join_axes(items: list, P, tol_m: float = 0.05) -> None:
+    """Стыки: конец прямой стены, лежащий у оси другой (не параллельной) стены не дальше её
+    полутолщины и своей толщины, продлевается до пересечения осей (L- и T-стыки)."""
+    straight = [x for x in items if len(x["pts"]) == 2]
+    for A in straight:
+        for e in (0, 1):
+            p, q = A["pts"][e], A["pts"][1 - e]
+            u = (p - q) / max(np.linalg.norm(p - q), 1e-9)
+            best = None
+            for B in straight:
+                if B is A:
+                    continue
+                b0, b1 = B["pts"]
+                Lb = np.linalg.norm(b1 - b0)
+                v = (b1 - b0) / max(Lb, 1e-9)
+                den = u[0] * v[1] - u[1] * v[0]
+                if abs(den) < 0.3:                            # почти параллельны
+                    continue
+                r = b0 - p
+                s_a = (r[0] * v[1] - r[1] * v[0]) / den           # p + s_a u = b0 + s_b v
+                s_b = (r[0] * u[1] - r[1] * u[0]) / den
+                reach = max(A["t"], B["t"]) + P(tol_m)
+                if not (-reach <= s_a <= reach and -reach <= s_b <= Lb + reach):
+                    continue
+                if best is None or abs(s_a) < abs(best):
+                    best = s_a
+            if best is not None:
+                A["pts"][e] = p + u * best
+
+
+def ifc_plan(plan, walls_out: list, wall_id: dict, kept: list, epix: dict, wallmask: np.ndarray, P, px: float,
+             to_m, room_id: list, frame: dict, t_min: float = 0.05, t_max: float = 0.6,
+             t_default: float = 0.1) -> dict:
+    """Уровень для export-ifc: стены - ось и толщина (по маске стен поперёк грани, от
+    помещения наружу; между двумя помещениями - в обе стороны), две грани одной стены -
+    одна ось; проёмы - на своих стенах; помещения как есть. Координаты - СК плана."""
+    items = []
+    has_op = {o["wall"] for o in kept}
+    for wi, w in enumerate(walls_out):
+        if wi not in wall_id:
+            continue
+        pr = w["pr"]
+        if (pr["t1"] - pr["t0"]) * px < 0.15 and wi not in has_op:
+            continue                                     # торец стены или обрезок на стыке
+        centers = pr["m"] + pr["d"] * (pr["t0"] + (np.arange(pr["nb"]) + 0.5) * pr["step"])[:, None]
+        if w["ctx"] == "RO":
+            o = pr["n"] * w["out_side"]
+            runs = np.array([_run(wallmask, c, o, P(t_max), P(0.05)) for c in centers])
+            runs = runs[runs > 0]
+            t = float(np.median(runs)) if len(runs) else t_default / px
+            t = float(np.clip(t * px, t_min, t_max)) / px
+            offset = o * t / 2
+        else:
+            rp = np.array([_run(wallmask, c, pr["n"], P(t_max), 0) for c in centers])
+            rm = np.array([_run(wallmask, c, -pr["n"], P(t_max), 0) for c in centers])
+            both = (rp + rm) > 0
+            t = float(np.median(rp[both] + rm[both] - 1)) if both.any() else t_default / px
+            t = float(np.clip(t * px, t_min, t_max)) / px
+            offset = pr["n"] * (float(np.median(rp[both] - rm[both])) / 2 if both.any() else 0.0)
+        items.append({"pts": _axis_points(epix[w["key"]], pr, offset, P), "t": t, "outer": w["outer"],
+                      "rooms": [room_id[r] for r in w["rooms"]], "src": [wi]})
+    items = _merge_axes(items, P)
+    _join_axes(items, P)
+    lvl = f"L{plan.level}"
+    walls, owner = [], {}
+    for i, it in enumerate(items):
+        wid = f"{lvl}-W{i + 1}"
+        for wi in it["src"]:
+            owner[wi] = wid
+        pts = [to_m(p) for p in it["pts"]]
+        walls.append({"id": wid, "points": pts, "thickness": round(it["t"] * px, 3), "is_outer": bool(it["outer"]),
+                      "rooms": it["rooms"],
+                      "length": round(float(sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))), 3)})
+    openings = []
+    for i, o in enumerate(kept):
+        if o["wall"] not in owner:
+            continue
+        openings.append({"id": f"{lvl}-O{i + 1}", "opening_type": "opening" if o["type"] == "gap" else o["type"],
+                         "wall_id": owner[o["wall"]], "a": to_m(o["a"]), "b": to_m(o["b"]),
+                         "width": round(o["width"], 3),
+                         "sill": None if o["sill"] is None else round(o["sill"], 2),
+                         "head": None if o["head"] is None else round(o["head"], 2)})
+    rooms = [{"id": r.id, "name": r.name, "points": r.points, "area": r.area, "perimeter": r.perimeter}
+             for r in plan.rooms]
+    return {"level": lvl, "floor_z": plan.floor_z, "ceiling_z": plan.ceiling_z, "walls": walls,
+            "openings": openings, "rooms": rooms,
+            "frame": {"cs": "plan = Rz(-rotation_deg) * world (x, y)", "rotation_deg": frame["rotation_deg"]},
+            "metadata": {"method": "cellplan"}}
 
 
 def _plot_cells(dbg, path, px):
@@ -870,7 +1138,8 @@ def _plot_features(F: dict, path):
     plt.close(fig)
 
 
-def cellplan(path, out_dir, px: float = 0.01, log=print) -> dict:
+def cellplan(path, out_dir, px: float = 0.01, pred=None, net_w: float = 1.0, log=print) -> dict:
+    """pred - каталог infer для этого файла (уровни с prob.npz и scene.json) или None."""
     from dataclasses import asdict
 
     from .floorplan import render, render_elevations
@@ -889,7 +1158,10 @@ def cellplan(path, out_dir, px: float = 0.01, log=print) -> dict:
         on = (st_world[:, 2] > lv["floor_z"]) & (st_world[:, 2] < lv["ceiling_z"]) if len(st_world) else []
         st_px = to_raster(st_world[on], frame) if len(st_world) and np.any(on) else np.zeros((0, 2))
         log(f"уровень {k}: стоянок {len(st_px)}")
-        plan, dbg = analyse_level(L, A, frame, st_px, k, log=log)
+        net = load_net(pred, lv, frame) if pred is not None else None
+        if pred is not None:
+            log(f"  сеть: {net['dir'] if net else 'нет уровня с этой отметкой пола - только правила'}")
+        plan, dbg = analyse_level(L, A, frame, st_px, k, net=net, net_w=net_w, log=log)
         sfx = "" if len(data) == 1 else f"_L{k}"
 
         render(plan, None, {}, out / f"plan{sfx}.png", title=f"Уровень {k}" if len(data) > 1 else "")
@@ -900,9 +1172,12 @@ def cellplan(path, out_dir, px: float = 0.01, log=print) -> dict:
         chk = check_against_heat(dbg, (A["lab"] == WALL) | (A["lab"] == DOOR), frame["px"])
         _plot_check(dbg, A["bands"]["all"], chk, plan, frame, out / f"check{sfx}.png")
         log(f"  сверка с картой: полнота стен {chk['recall']:.0%}, точность {chk['precision']:.0%}")
+        (out / f"plan_L{k}.json").write_text(json.dumps(dbg["ifc_plan"], indent=1, ensure_ascii=False, default=float),
+                                             encoding="utf-8")
         np.savez_compressed(out / f"features{sfx}.npz", **{n: dbg["features"][n].astype(np.float16) for n in FEATURES})
-        result["levels"].append({**asdict(plan), "check": {"wall_recall": round(chk["recall"], 3),
-                                                              "wall_precision": round(chk["precision"], 3)}})
+        result["levels"].append({**asdict(plan), "net": dbg["net"],
+                                 "check": {"wall_recall": round(chk["recall"], 3),
+                                           "wall_precision": round(chk["precision"], 3)}})
         log(f"уровень {k}: помещений {len(plan.rooms)}, стен {len(plan.walls)}, проёмов {len(plan.openings)}, "
             f"{sum(r.area for r in plan.rooms):.1f} м²")
     (out / "elements.json").write_text(json.dumps(result, indent=1, ensure_ascii=False, default=float),

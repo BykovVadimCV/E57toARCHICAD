@@ -138,6 +138,8 @@ def main(argv: list[str] | None = None) -> None:
     cp.add_argument("e57")
     cp.add_argument("--out", help="каталог (по умолчанию <файл>_cellplan рядом с файлом)")
     cp.add_argument("--px", type=float, default=0.01, help="размер пикселя, м")
+    cp.add_argument("--pred", help="каталог infer для этого файла (prob.npz + scene.json по уровням)")
+    cp.add_argument("--net-w", type=float, default=1.0, help="вес вероятностей сети в задаче")
     cr = sub.add_parser("calib-real", help="всё для подгонки генератора из E57 в один zip")
     cr.add_argument("e57", nargs="+", help="файлы E57 (реальные или scan.e57 сцен)")
     cr.add_argument("--out", required=True, help="каталог отчёта; рядом пишется <каталог>.zip")
@@ -237,7 +239,7 @@ def main(argv: list[str] | None = None) -> None:
 
         src = Path(args.e57)
         out = Path(args.out) if args.out else src.with_name(src.stem + "_cellplan")
-        cellplan(src, out, px=args.px)
+        cellplan(src, out, px=args.px, pred=args.pred, net_w=args.net_w)
         print(out)
         return
     if args.cmd == "calib-real":
