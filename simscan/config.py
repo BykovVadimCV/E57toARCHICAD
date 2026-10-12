@@ -123,6 +123,15 @@ class RealismConfig:
     lean_mm_per_m: Range = (0.0, 3.0)            # отклонение от вертикали
     shear_deg_sigma: float = 0.25                # отклонение углов от 90 градусов (сдвиг плана)
     thickness_jitter_mm: float = 5.0             # фактическая толщина против номинальной
+    # углы между стенами не 90° и дуговые стены (planwarp.py)
+    p_angle_jitter: float = 0.5                  # доля сцен с наклоном линий стен
+    angle_jitter_deg: float = 2.5                # наклон линии до ±; угол в узле 90 ± 2·это
+    p_line_tilt: float = 0.5                     # доля наклонённых линий в такой сцене
+    line_merge_m: float = 0.35                   # линии ближе - наклоняются вместе
+    p_arc: float = 0.3                           # доля сцен с дуговой наружной стеной
+    max_arcs: int = 1
+    arc_min_len_m: float = 1.5
+    arc_sagitta_m: Range = (0.15, 0.9)           # стрела дуги
 
 
 @dataclass

@@ -76,12 +76,19 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
     real = realism.sample_params(cfg.realism, rng)
     if real["enabled"]:
         realism.jitter_thickness(layout, cfg.realism.thickness_jitter_mm, rng)
-        layout.meta["warp"] = real["warp"]
     duplex = None
     if cfg.layout.p_duplex > 0 and rng.random() < cfg.layout.p_duplex:
         from .duplex import make_duplex
 
         duplex = make_duplex(layout, cfg, rng)          # None - лестница не встала: один этаж
+    # деформация плана (сдвиг, наклоны линий стен, дуги) - одна на оба этажа
+    from .planwarp import sample_warp
+
+    floors = [layout] + ([duplex["upper"]] if duplex else [])
+    real["warp"] = sample_warp(floors, real["warp"], cfg.realism, rng) if real["enabled"] \
+        else {"A": real["warp"]}
+    for lay in floors:
+        lay.meta["warp"] = real["warp"]
     grids = Furnisher(cfg.interior, rng).furnish(layout)
     stations = place_stations(layout, grids, cfg.scanner, rng)
     level_of = [0] * len(stations)
@@ -103,7 +110,7 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
         grids.update({k + 1000: g for k, g in grids_up.items()})
         mesh, solids, _ = build_duplex_scene(layout, up, dz, real, upper_realism(real, rng))
     else:
-        mesh, solids = build_scene(layout, real.get("tessellation_m"))
+        mesh, solids = build_scene(layout, realism.tessellation(real))
         realism.apply_to_mesh(mesh, real)
     if not stations:
         raise RuntimeError("не удалось поставить ни одной станции")

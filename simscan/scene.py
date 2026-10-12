@@ -163,9 +163,27 @@ def _palette() -> np.ndarray:
 
 class SceneBuilder:
     def __init__(self, layout: Layout):
+        from .planwarp import layout_warp
+
         self.layout = layout
         self.solids: list[Solid] = []
         self._next_instance = 1
+        w = layout_warp(layout)
+        self._arcs = [] if w is None else [(layout.wall(int(a["wall_id"])), a) for a in w.arcs]
+
+    def _near_arc(self, box: Box) -> bool:
+        """Тело в зоне дуговой стены (пролёт и затухание): в сетке оно разбивается, иначе
+        прямые грани останутся хордами и разойдутся с дугой."""
+        r = 0.5 * math.hypot(box.size[0], box.size[1])
+        c = np.asarray(box.center[:2], float)
+        for wall, a in self._arcs:
+            d = c - np.asarray(wall.p0, float)
+            s, n = d @ wall.u, d @ (wall.n * (wall.outward or 1))
+            t2 = wall.thickness / 2
+            if a["s"][0] - r < s < a["s"][1] + r and \
+                    -(t2 + a["falloff_in"]) - r < n < t2 + a["falloff_out"] + r:
+                return True
+        return False
 
     def _new_instance(self) -> int:
         k = self._next_instance
@@ -175,6 +193,7 @@ class SceneBuilder:
     def _add(self, box: Box, label: str, refl: float, source: str, instance: int | None = None,
              deform: bool = False):
         inst = self._new_instance() if instance is None else instance
+        deform = deform or bool(self._arcs and self._near_arc(box))
         self.solids.append(Solid(box, label, inst, float(refl), source, deform=deform))
         return inst
 
