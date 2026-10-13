@@ -96,6 +96,95 @@ def _segments(points) -> list[tuple[np.ndarray, np.ndarray]]:
     return [(a, b) for a, b in zip(pts, pts[1:]) if np.linalg.norm(b - a) >= MIN_SEGMENT]
 
 
+def _curved(wall: dict) -> bool:
+    """Дуга (или ломаная, заметно отходящая от хорды) - одна стена с изогнутым телом."""
+    pts = np.asarray(wall.get("points", []), float)
+    if wall.get("arc"):
+        return len(pts) > 2
+    if len(pts) <= 2:
+        return False
+    a, b = pts[0], pts[-1]
+    d = b - a
+    L = float(np.linalg.norm(d))
+    if L < 1e-9:
+        return False
+    n = np.array([-d[1], d[0]]) / L
+    if float(np.abs((pts - a) @ n).max()) <= 0.02:
+        return False
+    seg = np.diff(pts, axis=0)
+    seg = seg[np.linalg.norm(seg, axis=1) > 1e-9]
+    seg /= np.linalg.norm(seg, axis=1, keepdims=True)
+    turn = np.degrees(np.arccos(np.clip((seg[:-1] * seg[1:]).sum(1), -1, 1)))
+    return bool(len(turn)) and float(turn.max()) <= 20.0       # плавно (дуга), а не угол - угол режется на прямые
+
+
+def _offset(pts: np.ndarray, d: float) -> np.ndarray:
+    """Ломаная, сдвинутая на d по левой нормали (нормали в вершинах - средние)."""
+    seg = np.diff(pts, axis=0)
+    n = np.c_[-seg[:, 1], seg[:, 0]] / np.maximum(np.linalg.norm(seg, axis=1, keepdims=True), 1e-12)
+    nv = np.vstack([n[:1], (n[:-1] + n[1:]) / 2, n[-1:]])
+    nv /= np.maximum(np.linalg.norm(nv, axis=1, keepdims=True), 1e-12)
+    return pts + nv * d
+
+
+def _add_curved_wall(f, ctx, storey, mats, wall: dict, height: float, name: str) -> dict:
+    """Дуговая стена одним IfcWall: ось - ломаная, тело - полоса ±t/2 вдоль неё, выдавленная
+    на высоту."""
+    import ifcopenshell.api as api
+    import ifcopenshell.util.element
+
+    t = float(wall["thickness"])
+    pts = np.asarray(wall["points"], float)
+    w = api.run("root.create_entity", f, ifc_class="IfcWall", predefined_type="STANDARD", name=name)
+    w.ObjectPlacement = _placement(f, storey.ObjectPlacement)
+    axis = f.createIfcShapeRepresentation(
+        ctx["axis"], "Axis", "Curve2D", [f.createIfcPolyline([f.createIfcCartesianPoint(list(map(float, p)))
+                                                              for p in pts])])
+    band = np.vstack([_offset(pts, t / 2), _offset(pts, -t / 2)[::-1]])
+    prof = f.createIfcArbitraryClosedProfileDef(
+        "AREA", None, f.createIfcPolyline([f.createIfcCartesianPoint(list(map(float, p))) for p in band]
+                                          + [f.createIfcCartesianPoint(list(map(float, band[0])))]))
+    solid = f.createIfcExtrudedAreaSolid(
+        prof, f.createIfcAxis2Placement3D(f.createIfcCartesianPoint([0.0, 0.0, 0.0]), None, None),
+        f.createIfcDirection([0.0, 0.0, 1.0]), float(height))
+    body = f.createIfcShapeRepresentation(ctx["body"], "Body", "SweptSolid", [solid])
+    w.Representation = f.createIfcProductDefinitionShape(None, None, [axis, body])
+    api.run("material.assign_material", f, products=[w], type="IfcMaterialLayerSetUsage",
+            material=_layer_set(f, mats, t))
+    ifcopenshell.util.element.get_material(w).OffsetFromReferenceLine = -t / 2
+    api.run("spatial.assign_container", f, products=[w], relating_structure=storey)
+    pset = api.run("pset.add_pset", f, product=w, name="Pset_WallCommon")
+    api.run("pset.edit_pset", f, pset=pset, properties={"IsExternal": bool(wall.get("is_outer", False))})
+    return {"wall": w, "pts": pts, "t": t}
+
+
+def _chord_seg(f, storey, cw: dict, op: dict) -> dict:
+    """Участок под проём в дуговой стене: хорда между концами проёма (на оси), толщина - с
+    запасом на стрелу дуги на этой хорде, своё размещение (начало хорды, ось X вдоль неё)."""
+    pts = cw["pts"]
+    a, b = np.asarray(op["a"], float), np.asarray(op["b"], float)
+
+    def on_axis(p):
+        best, bq = np.inf, p
+        for s0, s1 in zip(pts[:-1], pts[1:]):
+            d = s1 - s0
+            t = float(np.clip((p - s0) @ d / max(d @ d, 1e-12), 0, 1))
+            q = s0 + t * d
+            if np.linalg.norm(q - p) < best:
+                best, bq = float(np.linalg.norm(q - p)), q
+        return bq
+
+    a, b = on_axis(a), on_axis(b)
+    L = float(np.linalg.norm(b - a))
+    u = (b - a) / max(L, 1e-9)
+    n = np.array([-u[1], u[0]])
+    inside = [(q - a) @ u for q in pts]
+    span = [q for q, s in zip(pts, inside) if 0 <= s <= L]
+    sag = max([abs((q - a) @ n) for q in span], default=0.0)
+    place = _placement(f, storey.ObjectPlacement, (a[0], a[1], 0.0), u)
+    return {"wall": cw["wall"], "a": a, "u": u, "L": L, "t": cw["t"] + 2 * sag, "place": place}
+
+
 def _add_wall(f, ctx, storey, mats, wall: dict, a: np.ndarray, b: np.ndarray, height: float, name: str):
     import ifcopenshell.api as api
     import ifcopenshell.util.element
@@ -108,14 +197,15 @@ def _add_wall(f, ctx, storey, mats, wall: dict, a: np.ndarray, b: np.ndarray, he
     axis = f.createIfcShapeRepresentation(
         ctx["axis"], "Axis", "Curve2D",
         [f.createIfcPolyline([f.createIfcCartesianPoint([0.0, 0.0]), f.createIfcCartesianPoint([L, 0.0])])])
-    w.Representation = f.createIfcProductDefinitionShape(None, None, [axis, _box(f, ctx["body"], 0, -t / 2, 0, L, t, height)])
+    w.Representation = f.createIfcProductDefinitionShape(
+        None, None, [axis, _box(f, ctx["body"], 0, -t / 2, 0, L, t, height)])
     api.run("material.assign_material", f, products=[w], type="IfcMaterialLayerSetUsage",
             material=_layer_set(f, mats, t))
     ifcopenshell.util.element.get_material(w).OffsetFromReferenceLine = -t / 2
     api.run("spatial.assign_container", f, products=[w], relating_structure=storey)
     pset = api.run("pset.add_pset", f, product=w, name="Pset_WallCommon")
     api.run("pset.edit_pset", f, pset=pset, properties={"IsExternal": bool(wall.get("is_outer", False))})
-    return {"wall": w, "a": a, "u": u, "L": L, "t": t}
+    return {"wall": w, "a": a, "u": u, "L": L, "t": t, "place": w.ObjectPlacement}
 
 
 def _host(segs: list[dict], by_id: dict, op: dict) -> dict | None:
@@ -173,7 +263,7 @@ def _add_opening(f, ctx, storey, seg: dict, op: dict, height: float, log) -> boo
 
     opening = api.run("root.create_entity", f, ifc_class="IfcOpeningElement", predefined_type="OPENING",
                       name=f"{op.get('id', kind)} opening")
-    opening.ObjectPlacement = _placement(f, seg["wall"].ObjectPlacement, (s0, 0.0, 0.0))
+    opening.ObjectPlacement = _placement(f, seg["place"], (s0, 0.0, 0.0))
     opening.Representation = f.createIfcProductDefinitionShape(
         None, None, [_box(f, ctx["body"], 0, -t / 2, sill, w, t, head - sill)])
     api.run("feature.add_feature", f, feature=opening, element=seg["wall"])
@@ -241,8 +331,16 @@ def export_plans(plans: list[dict], output_ifc: Path, project_name: str = "Apart
         storey.ObjectPlacement = _placement(f, building.ObjectPlacement, (0.0, 0.0, floor_z))
         api.run("aggregate.assign_object", f, products=[storey], relating_object=building)
 
-        segs, by_id = [], {}
+        segs, by_id, curved = [], {}, {}
         for wall in plan.get("walls", []):
+            if _curved(wall):                                  # дуга - одна стена
+                cw = _add_curved_wall(f, ctx, storey, mats, wall, height, wall.get("id", "wall"))
+                curved[wall.get("id")] = cw
+                for a, b in _segments(wall["points"]):         # для поиска хозяина проёма
+                    L = float(np.linalg.norm(b - a))
+                    segs.append({"wall": cw["wall"], "a": a, "u": (b - a) / L, "L": L, "t": cw["t"],
+                                 "curved": wall.get("id")})
+                continue
             parts = _segments(wall.get("points", []))
             for k, (a, b) in enumerate(parts):
                 name = wall.get("id", "wall") + (f".{k}" if len(parts) > 1 else "")
@@ -251,13 +349,19 @@ def export_plans(plans: list[dict], output_ifc: Path, project_name: str = "Apart
                 by_id.setdefault(wall.get("id"), []).append(seg)
         n_op = 0
         for op in plan.get("openings", []):
-            seg = _host(segs, by_id, op)
+            cid = op.get("wall_id") if op.get("wall_id") in curved else None
+            if cid is None:
+                seg = _host(segs, by_id, op)
+                cid = seg.get("curved") if seg is not None else None
+            if cid is not None:                                # в дуговой стене - по хорде проёма
+                seg = _chord_seg(f, storey, curved[cid], op)
             if seg is None:
                 log(f"  проём {op.get('id')} пропущен: нет стен")
                 continue
             n_op += _add_opening(f, ctx, storey, seg, op, height, log)
         n_sp = sum(_add_space(f, ctx, storey, r, height) for r in plan.get("rooms", []))
-        log(f"{level}: отметка {floor_z:.3f} м, высота {height:.2f} м; стен {len(segs)}, "
+        n_w = len({id(sg["wall"]) for sg in segs})
+        log(f"{level}: отметка {floor_z:.3f} м, высота {height:.2f} м; стен {n_w} (дуговых {len(curved)}), "
             f"проёмов {n_op} из {len(plan.get('openings', []))}, помещений {n_sp}")
     output_ifc = Path(output_ifc)
     output_ifc.parent.mkdir(parents=True, exist_ok=True)

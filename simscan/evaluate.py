@@ -555,3 +555,268 @@ def compare(a: dict, b: dict, names=("A", "B")) -> list[tuple]:
     pa, pb = pick(a), pick(b)
     return [(k, pa[k], pb.get(k), None if pa[k] is None or pb.get(k) is None else round(pb[k] - pa[k], 4))
             for k in pa]
+
+
+# ----------------------------------------------------------------------
+# Векторный план против векторного эталона (vector.json датасета)
+# ----------------------------------------------------------------------
+
+VEC_TOL_M = 0.06                    # ось стены найдена, если ближе 6 см
+VEC_STEP_M = 0.05                   # шаг выборки по осям
+OPEN_MATCH_M = 0.4                  # проём найден, если центр ближе 40 см и тип тот же
+
+
+def _polyline(geom) -> np.ndarray:
+    if geom["type"] == "segment":
+        return np.array([geom["p0"], geom["p1"]], float)
+    return np.asarray(geom["points"], float)
+
+
+def _sample(poly: np.ndarray, step: float):
+    """Точки вдоль ломаной через step и направление участка в каждой."""
+    pts, dirs = [], []
+    for a, b in zip(poly[:-1], poly[1:]):
+        L = float(np.linalg.norm(b - a))
+        if L < 1e-9:
+            continue
+        n = max(1, int(round(L / step)))
+        t = (np.arange(n) + 0.5) / n
+        pts.append(a + (b - a) * t[:, None])
+        dirs.append(np.repeat(((b - a) / L)[None], n, 0))
+    if not pts:
+        return np.zeros((0, 2)), np.zeros((0, 2))
+    return np.vstack(pts), np.vstack(dirs)
+
+
+def _seg_dist(p: np.ndarray, segs: np.ndarray):
+    """Расстояние от точек p [n,2] до отрезков segs [m,2,2]: (минимум, индекс отрезка)."""
+    if len(segs) == 0 or len(p) == 0:
+        return np.full(len(p), np.inf), np.zeros(len(p), int)
+    a, b = segs[:, 0], segs[:, 1]
+    d = b - a
+    L2 = np.maximum((d * d).sum(1), 1e-12)
+    out_d = np.full(len(p), np.inf)
+    out_i = np.zeros(len(p), int)
+    for k in range(0, len(p), 2000):
+        q = p[k:k + 2000, None, :]
+        t = np.clip(((q - a) * d).sum(-1) / L2, 0, 1)
+        dist = np.linalg.norm(q - (a + t[..., None] * d), axis=-1)
+        out_i[k:k + 2000] = dist.argmin(1)
+        out_d[k:k + 2000] = dist.min(1)
+    return out_d, out_i
+
+
+def _inside(pt, polys) -> bool:
+    import cv2
+
+    return any(cv2.pointPolygonTest(np.asarray(p, np.float32), (float(pt[0]), float(pt[1])), False) >= 0
+               for p in polys)
+
+
+def label_walls(gt_vec: dict, band: float = 0.10) -> list[dict]:
+    """Стены эталона так, как их учит сеть: наружная - полоса band от внутренней грани (сторона
+    помещения), внутренняя - во всю толщину. [{poly, t, exterior}]."""
+    rooms = [r["polygon"] for r in gt_vec.get("rooms", [])]
+    out = []
+    for w in gt_vec["walls"]:
+        poly = _polyline(w["geometry"])
+        t = float(w["thickness"])
+        if w.get("is_exterior") and t > band:
+            pts, dirs = _sample(poly, 0.5)
+            if len(pts):
+                nrm = np.c_[-dirs[:, 1], dirs[:, 0]]
+                side = 0
+                for sgn in (1, -1):
+                    side += sgn * sum(_inside(p + sgn * nrm[i] * (t / 2 + 0.25), rooms) for i, p in enumerate(pts))
+                sgn = 1 if side >= 0 else -1
+                d = poly[1:] - poly[:-1]
+                n_seg = np.c_[-d[:, 1], d[:, 0]] / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-12)
+                n_v = np.vstack([n_seg[:1], (n_seg[:-1] + n_seg[1:]) / 2, n_seg[-1:]]) if len(n_seg) > 1 \
+                    else np.vstack([n_seg, n_seg])
+                n_v /= np.maximum(np.linalg.norm(n_v, axis=1, keepdims=True), 1e-12)
+                poly = poly + sgn * n_v * (t / 2 - band / 2)
+                t = band
+        out.append({"poly": poly, "t": t, "exterior": bool(w.get("is_exterior"))})
+    return out
+
+
+def _opening_centers_gt(gt_vec: dict) -> list[dict]:
+    walls = {w["id"]: _polyline(w["geometry"]) for w in gt_vec["walls"]}
+    out = []
+    for o in gt_vec.get("openings", []):
+        poly = walls.get(o["host_wall_id"])
+        if poly is None:
+            continue
+        s = float(o["offset"]) + float(o["width"]) / 2
+        seg = np.linalg.norm(np.diff(poly, axis=0), axis=1)
+        k = int(np.searchsorted(np.cumsum(seg), s))
+        k = min(k, len(seg) - 1)
+        s0 = s - (np.cumsum(seg)[k] - seg[k])
+        c = poly[k] + (poly[k + 1] - poly[k]) * (s0 / max(seg[k], 1e-12))
+        out.append({"type": o["type"], "c": c, "width": float(o["width"])})
+    return out
+
+
+def _room_iou(gt_rooms, pr_rooms, px: float = 0.05) -> tuple[list, int]:
+    import cv2
+
+    polys = [np.asarray(r, float) for r in gt_rooms + pr_rooms if len(r) >= 3]
+    if not polys:
+        return [], 0
+    allp = np.vstack(polys)
+    lo = allp.min(0) - px
+    H, W = (np.ceil((allp.max(0) - lo) / px).astype(int) + 2)[::-1]
+
+    def mask(poly):
+        m = np.zeros((H, W), np.uint8)
+        q = np.round((np.asarray(poly, float) - lo) / px).astype(np.int32)
+        cv2.fillPoly(m, [q], 1)
+        return m.astype(bool)
+
+    gm = [mask(r) for r in gt_rooms if len(r) >= 3]
+    pm = [mask(r) for r in pr_rooms if len(r) >= 3]
+    ious = []
+    used = set()
+    for g in gm:
+        best, bj = 0.0, -1
+        for j, p in enumerate(pm):
+            if j in used:
+                continue
+            inter = (g & p).sum()
+            if inter:
+                iou = inter / (g | p).sum()
+                if iou > best:
+                    best, bj = iou, j
+        if bj >= 0 and best >= 0.3:
+            used.add(bj)
+        ious.append(best)
+    return ious, len(pm) - len(used)
+
+
+def _in_raster(xy: np.ndarray, plan: dict) -> np.ndarray:
+    """Точки внутри кадра растра плана (plan["pixel_to_world"], plan["frame"]); без кадра - все."""
+    M, fr = plan.get("pixel_to_world"), plan.get("frame") or {}
+    if M is None or not fr.get("width") or len(xy) == 0:
+        return np.ones(len(xy), bool)
+    M = np.vstack([np.asarray(M, float), [0, 0, 1]])
+    ji = (np.linalg.inv(M) @ np.c_[xy, np.ones(len(xy))].T).T
+    return (ji[:, 0] >= 0) & (ji[:, 0] < fr["width"]) & (ji[:, 1] >= 0) & (ji[:, 1] < fr["height"])
+
+
+def _structure_quality(gw, pw, owner_g, d_g, i_g, pseg, tol) -> dict:
+    """Чистота плана, а не только совпадение:
+      pieces_per_gt_wall - на сколько стен сети разбита прямая стена эталона (1 - одна прямая);
+      axis_offset_cm_p90 - разброс осей кусков, покрывающих одну стену эталона, поперёк неё
+                           (0 - все куски на одной прямой);
+      dangling_ends      - концы стен сети, не упирающиеся в другую стену (щели на стыках,
+                           обрывы) - на стену эталона;
+      standalone_walls   - стены сети, не касающиеся ни одной другой (пятна шума)."""
+    out = {}
+    seg_owner = np.array([k for k, w in enumerate(pw) for _ in range(len(w["poly"]) - 1)])
+    pieces, spread = [], []
+    if len(seg_owner):
+        for k, w in enumerate(gw):
+            if len(w["poly"]) != 2:
+                continue
+            m = (owner_g == k) & (d_g <= tol)
+            if m.sum() < 4:
+                continue
+            a, b = w["poly"]
+            u = (b - a) / max(np.linalg.norm(b - a), 1e-9)
+            nrm = np.array([-u[1], u[0]])
+            sd = pseg[i_g[m], 1] - pseg[i_g[m], 0]
+            par = np.abs((sd / np.maximum(np.linalg.norm(sd, axis=1, keepdims=True), 1e-9)) @ u) > 0.98
+            own, cnt = np.unique(seg_owner[i_g[m]][par], return_counts=True)
+            own = own[(cnt >= 3) & np.array([len(pw[o]["poly"]) == 2 for o in own], bool)]   # прямые от 15 см
+            if not len(own):
+                continue
+            pieces.append(len(own))
+            offs = []
+            for o in own:                                    # смещение куска - по его середине
+                q = pw[o]["poly"]
+                offs.append(float(((q[0] + q[-1]) / 2 - a) @ nrm))
+            spread.append((max(offs) - min(offs)) * 100 if len(offs) > 1 else 0.0)
+    out["pieces_per_gt_wall"] = _r(np.mean(pieces), 2) if pieces else None
+    out["axis_offset_cm_p90"] = _r(np.percentile(spread, 90), 1) if spread else None
+    # концы и одиночки
+    segs = [(k, a, b) for k, w in enumerate(pw) for a, b in zip(w["poly"][:-1], w["poly"][1:])]
+    dang, alone = 0, 0
+    for k, w in enumerate(pw):
+        other = np.array([[a, b] for o, a, b in segs if o != k]).reshape(-1, 2, 2)
+        reach = max(w["t"], 0.05) / 2 + 0.05
+        ends = np.array([w["poly"][0], w["poly"][-1]])
+        d, _ = _seg_dist(ends, other)
+        free = d > reach + 0.15
+        dang += int(free.sum())
+        if free.all():
+            pts, _ = _sample(w["poly"], 0.05)
+            dd, _ = _seg_dist(pts, other)
+            alone += int((dd > reach + 0.15).all())
+    out["dangling_ends_per_gt_wall"] = _r(dang / max(len(gw), 1), 3)
+    out["standalone_walls"] = alone
+    return out
+
+
+def vector_metrics(plan: dict, gt_vec: dict, tol: float = VEC_TOL_M) -> dict:
+    """plan.json (vectorize / cellplan, мировая СК) против vector.json датасета.
+
+    стены: полнота / точность осей с допуском tol (оси эталона - как учится сеть, см.
+           label_walls), ошибка направления (°) и толщины (см) на совпавших участках, число
+           стен на стену эталона (дробление);
+    проёмы: центр ближе OPEN_MATCH_M и тот же тип - найден; ошибка ширины;
+    помещения: IoU с лучшим совпавшим, лишние."""
+    gw = label_walls(gt_vec)
+    pw = [{"poly": np.asarray(w["points"], float), "t": float(w.get("thickness") or 0.0)}
+          for w in plan.get("walls", []) if len(w.get("points", [])) >= 2]
+    gseg = np.array([[a, b] for w in gw for a, b in zip(w["poly"][:-1], w["poly"][1:])]).reshape(-1, 2, 2)
+    gseg_t = np.array([w["t"] for w in gw for _ in range(len(w["poly"]) - 1)])
+    pseg = np.array([[a, b] for w in pw for a, b in zip(w["poly"][:-1], w["poly"][1:])]).reshape(-1, 2, 2)
+    pseg_t = np.array([w["t"] for w in pw for _ in range(len(w["poly"]) - 1)])
+    gs = [_sample(w["poly"], VEC_STEP_M) for w in gw]
+    gp = np.vstack([s[0] for s in gs]) if gs else np.zeros((0, 2))
+    gd = np.vstack([s[1] for s in gs]) if gs else np.zeros((0, 2))
+    owner_g = np.concatenate([np.full(len(s[0]), k) for k, s in enumerate(gs)]) if gs else np.zeros(0, int)
+    inside = _in_raster(gp, plan)                               # за краем растра сеть не видит
+    gp, gd, owner_g = gp[inside], gd[inside], owner_g[inside]
+    ps = [_sample(w["poly"], VEC_STEP_M) for w in pw]
+    pp = np.vstack([s[0] for s in ps]) if ps else np.zeros((0, 2))
+    d_g, i_g = _seg_dist(gp, pseg)
+    d_p, _ = _seg_dist(pp, gseg)
+    hit = d_g <= tol
+    res = {"walls_gt": len(gw), "walls_pred": len(pw),
+           "axis_recall": _r(hit.mean()) if len(gp) else None,
+           "axis_precision": _r((d_p <= tol).mean()) if len(pp) else None}
+    if hit.any():
+        pd_ = pseg[i_g[hit], 1] - pseg[i_g[hit], 0]
+        pd_ /= np.maximum(np.linalg.norm(pd_, axis=1, keepdims=True), 1e-12)
+        ang = np.degrees(np.arccos(np.clip(np.abs((pd_ * gd[hit]).sum(1)), 0, 1)))
+        _, i_t = _seg_dist(gp[hit], gseg)
+        terr = np.abs(pseg_t[i_g[hit]] - gseg_t[i_t]) * 100
+        res.update({"angle_err_deg_median": _r(np.median(ang), 2), "angle_err_deg_p90": _r(np.percentile(ang, 90), 2),
+                    "thickness_err_cm_median": _r(np.median(terr), 1)})
+    res["axis_f1"] = _r(_f1(res["axis_recall"] or 0, res["axis_precision"] or 0))
+    res.update(_structure_quality(gw, pw, owner_g, d_g, i_g, pseg, tol))
+    # проёмы
+    go = [g for g in _opening_centers_gt(gt_vec) if _in_raster(np.asarray(g["c"])[None], plan)[0]]
+    po = [{"type": o.get("opening_type"), "c": (np.asarray(o["a"], float) + np.asarray(o["b"], float)) / 2,
+           "width": float(o.get("width") or np.linalg.norm(np.subtract(o["a"], o["b"])))}
+          for o in plan.get("openings", [])]
+    used, tp, werr = set(), 0, []
+    for g in go:
+        cand = [(np.linalg.norm(p["c"] - g["c"]), j) for j, p in enumerate(po)
+                if j not in used and p["type"] == g["type"]]
+        if cand:
+            dmin, j = min(cand)
+            if dmin <= OPEN_MATCH_M:
+                used.add(j)
+                tp += 1
+                werr.append(abs(po[j]["width"] - g["width"]) * 100)
+    res.update({"openings_gt": len(go), "openings_pred": len(po), "openings_found": tp,
+                "openings_f1": _r(_f1(tp / max(len(po), 1), tp / max(len(go), 1))) if go or po else None,
+                "opening_width_err_cm": _r(np.median(werr), 1) if werr else None})
+    # помещения
+    ious, extra = _room_iou([r["polygon"] for r in gt_vec.get("rooms", [])],
+                            [r["points"] for r in plan.get("rooms", [])])
+    res.update({"rooms_gt": len(ious), "rooms_pred": len(plan.get("rooms", [])), "rooms_extra": extra,
+                "room_iou_mean": _r(np.mean(ious)) if ious else None})
+    return res

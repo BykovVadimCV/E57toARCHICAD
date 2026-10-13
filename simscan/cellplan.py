@@ -43,6 +43,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .walls import join, merge_collinear
+
 OUT = 0
 
 
@@ -864,80 +866,6 @@ def _axis_points(pix, pr: dict, offset: np.ndarray, P) -> np.ndarray:
     return q + nrm * off_len
 
 
-def _merge_axes(items: list, P, gap_m: float = 0.3) -> list:
-    """Две грани одной стены (видны из двух помещений) дают почти одну ось - одна стена; так же
-    соосные участки с зазором до gap_m (наружная стена, разрезанная примыкающей перегородкой).
-    Уже проёма зазор не бывает, поэтому настоящий проход так не закрывается."""
-    alive = [True] * len(items)
-    changed = True
-    while changed:
-        changed = False
-        for i, A in enumerate(items):
-            if not alive[i] or len(A["pts"]) != 2:
-                continue
-            a0, a1 = A["pts"]
-            u = (a1 - a0) / max(np.linalg.norm(a1 - a0), 1e-9)
-            nrm = np.array([-u[1], u[0]])
-            for j in range(i + 1, len(items)):
-                B = items[j]
-                if not alive[j] or len(B["pts"]) != 2:
-                    continue
-                b0, b1 = B["pts"]
-                v = (b1 - b0) / max(np.linalg.norm(b1 - b0), 1e-9)
-                if abs(u[0] * v[1] - u[1] * v[0]) > 0.05:
-                    continue
-                off = ((b0 + b1) / 2 - a0) @ nrm
-                if abs(off) > max(P(0.04), 0.25 * max(A["t"], B["t"])):
-                    continue
-                sa = sorted([0.0, (a1 - a0) @ u])
-                sb = sorted([(b0 - a0) @ u, (b1 - a0) @ u])
-                if min(sa[1], sb[1]) - max(sa[0], sb[0]) < -P(gap_m) or A["outer"] != B["outer"] and \
-                        min(sa[1], sb[1]) - max(sa[0], sb[0]) <= 0:
-                    continue
-                la, lb = sa[1] - sa[0], sb[1] - sb[0]
-                base = a0 + nrm * off * lb / (la + lb)
-                lo, hi = min(sa[0], sb[0]), max(sa[1], sb[1])
-                A["pts"] = np.array([base + u * lo, base + u * hi])
-                A["t"] = (A["t"] * la + B["t"] * lb) / (la + lb)
-                A["outer"] = A["outer"] or B["outer"]
-                A["rooms"] = sorted(set(A["rooms"]) | set(B["rooms"]))
-                A["src"] += B["src"]
-                alive[j] = False
-                changed = True
-                a0, a1 = A["pts"]
-    return [x for x, ok in zip(items, alive) if ok]
-
-
-def _join_axes(items: list, P, tol_m: float = 0.05) -> None:
-    """Стыки: конец прямой стены, лежащий у оси другой (не параллельной) стены не дальше её
-    полутолщины и своей толщины, продлевается до пересечения осей (L- и T-стыки)."""
-    straight = [x for x in items if len(x["pts"]) == 2]
-    for A in straight:
-        for e in (0, 1):
-            p, q = A["pts"][e], A["pts"][1 - e]
-            u = (p - q) / max(np.linalg.norm(p - q), 1e-9)
-            best = None
-            for B in straight:
-                if B is A:
-                    continue
-                b0, b1 = B["pts"]
-                Lb = np.linalg.norm(b1 - b0)
-                v = (b1 - b0) / max(Lb, 1e-9)
-                den = u[0] * v[1] - u[1] * v[0]
-                if abs(den) < 0.3:                            # почти параллельны
-                    continue
-                r = b0 - p
-                s_a = (r[0] * v[1] - r[1] * v[0]) / den           # p + s_a u = b0 + s_b v
-                s_b = (r[0] * u[1] - r[1] * u[0]) / den
-                reach = max(A["t"], B["t"]) + P(tol_m)
-                if not (-reach <= s_a <= reach and -reach <= s_b <= Lb + reach):
-                    continue
-                if best is None or abs(s_a) < abs(best):
-                    best = s_a
-            if best is not None:
-                A["pts"][e] = p + u * best
-
-
 def ifc_plan(plan, walls_out: list, wall_id: dict, kept: list, epix: dict, wallmask: np.ndarray, P, px: float,
              to_m, room_id: list, frame: dict, t_min: float = 0.05, t_max: float = 0.6,
              t_default: float = 0.1) -> dict:
@@ -969,8 +897,8 @@ def ifc_plan(plan, walls_out: list, wall_id: dict, kept: list, epix: dict, wallm
             offset = pr["n"] * (float(np.median(rp[both] - rm[both])) / 2 if both.any() else 0.0)
         items.append({"pts": _axis_points(epix[w["key"]], pr, offset, P), "t": t, "outer": w["outer"],
                       "rooms": [room_id[r] for r in w["rooms"]], "src": [wi]})
-    items = _merge_axes(items, P)
-    _join_axes(items, P)
+    items = merge_collinear(items, P)
+    join(items, P, free_reach_m=0.0)
     lvl = f"L{plan.level}"
     walls, owner = [], {}
     for i, it in enumerate(items):
