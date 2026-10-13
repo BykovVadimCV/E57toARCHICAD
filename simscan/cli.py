@@ -97,13 +97,17 @@ def main(argv: list[str] | None = None) -> None:
     inf.add_argument("paths", nargs="+")
     inf.add_argument("--out", required=True)
     inf.add_argument("--tile", type=int, default=512)
-    inf.add_argument("--tta", action="store_true", help="Test-Time Augmentation: усреднение по 4 вариантам (flipH/V/HV), +1-2% IoU")
+    inf.add_argument("--tta", nargs="?", const="flip", default="none", choices=["none", "flip", "d4"],
+                     help="Test-Time Augmentation: flip - 4 отражения (по умолчанию для --tta), d4 - 8 вариантов")
+    inf.add_argument("--plan", action="store_true", help="сразу векторный план уровня (plan.json, simscan/vectorize.py)")
+    inf.add_argument("--batch", type=int, default=4, help="окон за проход сети")
     ev = sub.add_parser("evaluate", help="подробная оценка сети на val/test: report.json, levels.csv, графики")
     ev.add_argument("ckpt", help="best.pt")
     ev.add_argument("--data", required=True, help="корень датасета")
     ev.add_argument("--split", default="test", choices=["train", "val", "test"])
     ev.add_argument("--out", required=True, help="каталог отчёта")
-    ev.add_argument("--tta", action="store_true", help="Test-Time Augmentation (4 отражения)")
+    ev.add_argument("--tta", nargs="?", const="flip", default="none", choices=["none", "flip", "d4"],
+                    help="Test-Time Augmentation: flip (4) или d4 (8)")
     ev.add_argument("--tile", type=int, default=512)
     ev.add_argument("--limit", type=int, help="не больше стольких уровней (быстрая проверка)")
     d = sub.add_parser("dump-config", help="напечатать конфигурацию по умолчанию (YAML)")
@@ -214,7 +218,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "infer":
         from .infer import infer
 
-        infer(args.ckpt, args.paths, args.out, tile=args.tile, tta=args.tta)
+        infer(args.ckpt, args.paths, args.out, tile=args.tile, tta=args.tta, plan=args.plan, batch=args.batch)
         return
     if args.cmd == "make-dataset":
         from .config import load_config
@@ -307,7 +311,6 @@ def main(argv: list[str] | None = None) -> None:
         print("отправить:", rep.get("zip"))
         return
     if args.cmd == "pair":
-        import json
         from pathlib import Path
 
         from .rasterize import pair_data, pair_sheet
@@ -324,8 +327,8 @@ def main(argv: list[str] | None = None) -> None:
         from .evaluate import evaluate
 
         rep = evaluate(args.ckpt, args.data, args.split, args.out, tta=args.tta, tile=args.tile, limit=args.limit)
-        print(json.dumps({k: rep[k] for k in ("levels", "miou_walls", "struct_iou", "struct_tol", "skeleton",
-                                              "openings")}, indent=1, ensure_ascii=False))
+        print(json.dumps({k: rep.get(k) for k in ("levels", "miou_walls", "struct_iou", "struct_tol", "skeleton",
+                                                  "openings", "vector")}, indent=1, ensure_ascii=False))
         return
     if args.cmd == "vectorize":
         from pathlib import Path
@@ -344,7 +347,6 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.cmd == "debug":
-        import json
 
         from .debug import debug_scene
 

@@ -374,17 +374,37 @@ def _err_rgb(sem, pred):
     return im
 
 
-def evaluate(ckpt, data, split: str = "test", out=None, tta: bool = False, tile: int = 512,
-             limit: int | None = None, worst: int = 6, log=print) -> dict:
+VEC_KEYS = ("axis_recall", "axis_precision", "axis_f1", "angle_err_deg_median", "thickness_err_cm_median",
+            "pieces_per_gt_wall", "axis_offset_cm_p90", "dangling_ends_per_gt_wall", "standalone_walls",
+            "openings_f1", "opening_width_err_cm", "room_iou_mean")
+
+
+def aggregate_vector(rows: list[dict]) -> dict:
+    """Средние по уровням для векторного плана; проёмы и помещения - суммы."""
+    out = {}
+    for k in VEC_KEYS:
+        v = [r[k] for r in rows if r.get(k) is not None]
+        out[k] = _r(np.mean(v), 3) if v else None
+    for k in ("openings_gt", "openings_found", "openings_pred", "rooms_gt", "rooms_pred", "walls_gt", "walls_pred",
+              "standalone_walls"):
+        out[k + "_total"] = int(sum(r.get(k) or 0 for r in rows))
+    return out
+
+
+def evaluate(ckpt, data, split: str = "test", out=None, tta=False, tile: int = 512,
+             limit: int | None = None, worst: int = 6, vector: bool = True, log=print) -> dict:
+    """vector: ещё и векторный план уровня (vectorize) против vector.json - стены, проёмы,
+    помещения, чистота контура (vector_metrics)."""
     from .infer import load_model, predict
     from .torchdata import load_level
+    from .vectorize import vectorize_arrays
 
     data = Path(data)
     ids = (data / "splits" / f"{split}.txt").read_text(encoding="utf-8").split()
     if limit:
         ids = ids[:limit]
     model, dev = load_model(ckpt)
-    stats, rows, heap = [], [], []
+    stats, rows, heap, vrows = [], [], [], []
     groups: dict = {}
     for k, i in enumerate(ids):
         d = data / "scenes" / i
@@ -395,6 +415,15 @@ def evaluate(ckpt, data, split: str = "test", out=None, tta: bool = False, tile:
         st = level_stats(s, r, ceil)
         stats.append(st)
         row = {"id": i, **level_tags(scene), **level_summary(st)}
+        if vector and (d / "vector.json").exists():
+            try:
+                plan = vectorize_arrays(r["prob"], r["orient"], r["heights"], scene, log=lambda *a: None)
+                vm = vector_metrics(plan, json.loads((d / "vector.json").read_text(encoding="utf-8")))
+            except Exception as exc:                          # уровень без стен и т.п. - не рушить разбор
+                vm = {"error": repr(exc)[:200]}
+            vrows.append(vm)
+            row.update({f"vec_{k}": vm.get(k) for k in ("axis_f1", "pieces_per_gt_wall", "dangling_ends_per_gt_wall",
+                                                          "standalone_walls", "openings_f1", "room_iou_mean")})
         rows.append(row)
         for g, v in level_tags(scene).items():
             groups.setdefault((g, v), []).append(st)
@@ -408,6 +437,9 @@ def evaluate(ckpt, data, split: str = "test", out=None, tta: bool = False, tile:
         if (k + 1) % 10 == 0 or k + 1 == len(ids):
             log(f"  {k + 1}/{len(ids)}")
     rep = {"ckpt": str(ckpt), "split": split, "tta": tta, **aggregate(stats)}
+    if vrows:
+        rep["vector"] = aggregate_vector([v for v in vrows if "error" not in v])
+        rep["vector"]["errors"] = sum("error" in v for v in vrows)
     rep["groups"] = {}
     for (g, v), ss in sorted(groups.items()):
         a = aggregate(ss)

@@ -8,7 +8,7 @@ from simscan import infer
 from simscan.torchdata import IGNORE, FloorplanSamples
 
 
-def _fake_single(model, dev, x, tile=512, overlap=128, return_logits=False):
+def _fake_single(model, dev, x, tile=512, overlap=128, return_logits=False, **kw):
     """Эквивариантная «сеть»: (cos 2θ, sin 2θ) направления линии по тензору структуры x[0]."""
     gy, gx = np.gradient(x[0].astype(np.float64))
     jxx, jyy, jxy = (gx * gx).sum(), (gy * gy).sum(), (gx * gy).sum()
@@ -34,9 +34,10 @@ def test_tta_keeps_oblique_orientation(monkeypatch):
     for deg in (30, 60, 88, 93, 120):
         x = _line(deg)
         plain = infer.predict(None, None, x, tta=False)["orient"][:, 48, 48]
-        tta = infer.predict(None, None, x, tta=True)["orient"][:, 48, 48]
         assert abs(plain[1]) > 0.05, deg                    # sin 2θ не ноль - стена косая
-        assert np.allclose(plain, tta, atol=1e-4), (deg, plain, tta)
+        for mode in (True, "flip", "d4"):                   # отражения и повороты на 90°
+            tta = infer.predict(None, None, x, tta=mode)["orient"][:, 48, 48]
+            assert np.allclose(plain, tta, atol=1e-4), (deg, mode, plain, tta)
 
 
 def _dataset(tmp_path, n=64):

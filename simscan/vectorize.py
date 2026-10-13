@@ -318,7 +318,8 @@ def walls_from_mask(mask: np.ndarray, px: float, orient: np.ndarray | None = Non
     """Маска конструкции -> стены в пикселях (j, i): {"pts", "t", "free", "arc"?}."""
     import cv2
 
-    dt = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+    # край растра - фон (иначе маска во весь растр даёт бесконечные расстояния)
+    dt = cv2.distanceTransform(np.pad(mask.astype(np.uint8), 1), cv2.DIST_L2, 5)[1:-1, 1:-1]
     sk = prune_spurs(unstair(thin(mask)), dt)
     deg = _degree(sk)
     items = []
@@ -331,7 +332,7 @@ def walls_from_mask(mask: np.ndarray, px: float, orient: np.ndarray | None = Non
             i0, i1 = seg["idx"]
             q = xy[i0:i1 + 1]
             qp = pix[i0:i1 + 1]
-            t = max(2.0, 2 * float(np.median(dt[qp[:, 0], qp[:, 1]])) - 1.0)
+            t = float(np.clip(2 * float(np.median(dt[qp[:, 0], qp[:, 1]])) - 1.0, 2.0, 1.0 / px))   # 4 см - 1 м
             free = (bool(deg[tuple(qp[0])] == 1), bool(deg[tuple(qp[-1])] == 1))
             if seg["kind"] == "arc":
                 items.append({"t": t, "free": free, "arc": {"c": seg["c"], "r": seg["r"]}, "fit": q})
@@ -553,8 +554,14 @@ def _load(pred_dir: Path):
 
 def vectorize(pred_dir, log=print) -> dict:
     """Каталог уровня из infer -> план (словарь в формате export-ifc, мировые метры)."""
-    pred_dir = Path(pred_dir)
-    prob, orient, heights, scene = _load(pred_dir)
+    prob, orient, heights, scene = _load(Path(pred_dir))
+    return vectorize_arrays(prob, orient, heights, scene, log=log)
+
+
+def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.ndarray | None, scene: dict,
+                     log=print) -> dict:
+    """Выход сети (prob [8,H,W], orient [2,H,W], heights [2,H,W]) и scene.json уровня -> план."""
+    prob = np.asarray(prob, np.float32)
     M = np.asarray(scene["pixel_to_world"], float)
     px = float(abs(M[0, 0]))
     floor_z = float(scene.get("floor_z", 0.0))
@@ -622,8 +629,11 @@ def vectorize(pred_dir, log=print) -> dict:
                           "area": round(area, 2), "perimeter": round(per, 2)})
     log(f"{lvl}: стен {len(walls_out)} (кусков скелета {n0}), дуг {sum('arc' in w for w in walls_out)}, "
         f"проёмов {len(ops_out)}, помещений {len(rooms_out)}")
+    frame = dict(scene.get("frame") or {})
+    frame.setdefault("width", prob.shape[2])
+    frame.setdefault("height", prob.shape[1])
     return {"level": lvl, "floor_z": floor_z, "ceiling_z": ceil_z, "walls": walls_out, "openings": ops_out,
-            "rooms": rooms_out, "frame": scene.get("frame"), "pixel_to_world": M.tolist(),
+            "rooms": rooms_out, "frame": frame, "pixel_to_world": M.tolist(),
             "metadata": {"method": "skeleton-graph", "pixel_m": px}}
 
 

@@ -1,6 +1,6 @@
 """Применение сети плана к реальному E57 (или к уже растеризованному input.npy).
 
-    python -m simscan infer best.pt объект.e57 --out pred [--tta]
+    python -m simscan infer best.pt объект.e57 --out pred [--tta flip|d4] [--plan]
 
 На уровень: pred/<файл>/L<k>/
     sem.png        классы 0..7 (netinput.CLASSES), тот же растр 2 см, что вход
@@ -8,13 +8,14 @@
     dist.npy, orient.npy, heights.npy  - регрессионные головы (как разметка датасета)
     scene.json     кадр растра и pixel_to_world (пиксель -> мировые x, y)
     pred.png       цветная карта классов поверх входа
+    plan.json, plan.png, plan.svg - векторный план уровня (с --plan, simscan/vectorize.py)
 
-Растр предсказывается окнами tile×tile с перекрытием; вклад окна взвешен к центру,
-чтобы на стыках не было швов.
+Растр предсказывается окнами tile x tile с перекрытием, пачками по batch окон; вклад окна
+взвешен к центру, чтобы на стыках не было швов. Усредняются логиты, не вероятности.
 
-Улучшения v2:
-- Test-Time Augmentation (TTA): усреднение по 4 вариантам (orig, flipH, flipV, flipHV)
-  даёт +1-2% IoU за счёт снижения дисперсии предсказаний на границах
+TTA (--tta): flip - 4 варианта (отражения), d4 - 8 (повороты на 90° x отражение). Выходы
+возвращаются обратным преобразованием по тем же правилам, что аугментации обучения
+(torchdata): отражение меняет знак sin 2θ, поворот на 90° - знак всего (cos 2θ, sin 2θ).
 """
 from __future__ import annotations
 
@@ -39,66 +40,54 @@ def load_model(ckpt, device=None):
     return m, dev
 
 
-def predict(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 128, tta: bool = False) -> dict:
+TTA_SETS = {"none": [(0, False)],
+            "flip": [(0, False), (0, True), (2, False), (2, True)],
+            "d4": [(k, f) for k in range(4) for f in (False, True)]}
+
+
+def _forward(a: np.ndarray, k: int, flip: bool) -> np.ndarray:
+    if flip:
+        a = a[..., ::-1]
+    return np.rot90(a, k, axes=(-2, -1))
+
+
+def _inverse(r: dict, k: int, flip: bool) -> dict:
+    """Выходы сети на преобразованном входе -> в кадр исходного (см. torchdata._flip_x/_rot90)."""
+    out = {key: np.rot90(v, -k, axes=(-2, -1)) for key, v in r.items()}
+    if flip:
+        out = {key: v[..., ::-1] for key, v in out.items()}
+    out = {key: np.ascontiguousarray(v) for key, v in out.items()}
+    if k % 2:
+        out["orient"] = -out["orient"]
+    if flip:
+        out["orient"][1] = -out["orient"][1]
+    return out
+
+
+def predict(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 128, tta=False, batch: int = 4) -> dict:
     """x [8, H, W] -> {"prob" [8,H,W], "dist" [1,H,W], "orient" [2,H,W], "heights" [2,H,W]}.
 
-    tta=True: Test-Time Augmentation с усреднением по 4 вариантам (orig, flipH, flipV, flipHV).
-    Мягкое усреднение logits перед softmax.
-    """
-    if not tta:
-        return _predict_single(model, dev, x, tile, overlap)
-
-    # TTA: 4 варианта (fx, fy). Каждое отражение меняет знак sin 2θ (как _flip_x/_flip_y в
-    # torchdata), поэтому обратное отражение orient тоже меняет знак [1], иначе после
-    # усреднения sin 2θ гасится и косые стены сваливаются в 0° / 90°.
-    def _flip(a: np.ndarray, fx: bool, fy: bool) -> np.ndarray:
-        if fx:
-            a = np.flip(a, -1)
-        if fy:
-            a = np.flip(a, -2)
-        return a.copy()
-
-    def _reverse(r: dict, fx: bool, fy: bool) -> dict:
-        out = {k: _flip(v, fx, fy) for k, v in r.items()}
-        if fx != fy:
-            out["orient"][1] *= -1
-        return out
-
-    variants = [(fx, fy) for fy in (False, True) for fx in (False, True)]
-
-    # Усреднить logits, не prob
-    C, H, W = x.shape
-    acc_logits = np.zeros((8, H, W), np.float32)
-    acc_dist = np.zeros((1, H, W), np.float32)
-    acc_orient = np.zeros((2, H, W), np.float32)
-    acc_heights = np.zeros((2, H, W), np.float32)
-
-    for fx, fy in variants:
-        r = _predict_single(model, dev, _flip(x, fx, fy), tile, overlap, return_logits=True)
-        r = _reverse(r, fx, fy)
-        acc_logits += r["logits"]
-        acc_dist += r["dist"]
-        acc_orient += r["orient"]
-        acc_heights += r["heights"]
-
-    # Усреднить
-    acc_logits /= len(variants)
-    acc_dist /= len(variants)
-    acc_orient /= len(variants)
-    acc_heights /= len(variants)
-
-    # Softmax после усреднения logits
-    prob = np.exp(acc_logits - acc_logits.max(0)) / np.exp(acc_logits - acc_logits.max(0)).sum(0)
-
-    # Нормализовать orient
-    n = np.linalg.norm(acc_orient, axis=0, keepdims=True)
-    acc_orient = acc_orient / np.maximum(n, 1e-6)
-
-    return {"prob": prob, "dist": acc_dist, "orient": acc_orient, "heights": acc_heights}
+    tta: False/"none", True/"flip" (4 отражения) или "d4" (8: повороты x отражение) - логиты и
+    регрессии усредняются по вариантам, возвращённым в кадр входа."""
+    mode = {False: "none", True: "flip", None: "none"}.get(tta, tta)
+    variants = TTA_SETS[mode]
+    acc = None
+    for k, flip in variants:
+        r = _inverse(_predict_single(model, dev, np.ascontiguousarray(_forward(x, k, flip)), tile, overlap,
+                                     return_logits=True, batch=batch), k, flip)
+        acc = r if acc is None else {key: acc[key] + r[key] for key in acc}
+    res = {key: v / len(variants) for key, v in acc.items()}
+    lg = res.pop("logits")
+    e = np.exp(lg - lg.max(0))
+    res["prob"] = e / e.sum(0)
+    n = np.linalg.norm(res["orient"], axis=0, keepdims=True)
+    res["orient"] = res["orient"] / np.maximum(n, 1e-6)
+    return res
 
 
-def _predict_single(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 128, return_logits: bool = False) -> dict:
-    """x [8, H, W] -> {"prob" [8,H,W], "dist" [1,H,W], "orient" [2,H,W], "heights" [2,H,W]}."""
+def _predict_single(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 128, return_logits: bool = False,
+                    batch: int = 4) -> dict:
+    """Одно положение входа: окна tile x tile с перекрытием, пачками по batch."""
     import torch
 
     C, H, W = x.shape
@@ -113,33 +102,29 @@ def _predict_single(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 1
     if xs[-1] != Wp - tile:
         xs.append(Wp - tile)
     r = np.minimum(np.arange(tile) + 1, tile - np.arange(tile)).astype(np.float32)
-    wt = np.minimum.outer(r, r)
-    wt = np.clip(wt / max(overlap / 2, 1), 0.05, 1.0)
+    wt = np.clip(np.minimum.outer(r, r) / max(overlap / 2, 1), 0.05, 1.0)
     acc = {"logits": np.zeros((8, Hp, Wp), np.float32), "dist": np.zeros((1, Hp, Wp), np.float32),
            "orient": np.zeros((2, Hp, Wp), np.float32), "heights": np.zeros((2, Hp, Wp), np.float32)}
     wsum = np.zeros((Hp, Wp), np.float32)
-    with torch.no_grad():
-        for y in ys:
-            for xx in xs:
-                t = torch.from_numpy(xp[None, :, y:y + tile, xx:xx + tile]).to(dev)
-                with torch.autocast(dev.type, enabled=dev.type == "cuda"):
-                    o = model(t)
-                o = {k: v.float()[0].cpu().numpy() for k, v in o.items()}
-                # Сохранить logits, не prob
-                acc["logits"][:, y:y + tile, xx:xx + tile] += o["sem"] * wt
+    pos = [(y, xx) for y in ys for xx in xs]
+    with torch.inference_mode():
+        for b0 in range(0, len(pos), max(1, batch)):
+            chunk = pos[b0:b0 + max(1, batch)]
+            t = torch.from_numpy(np.stack([xp[:, y:y + tile, xx:xx + tile] for y, xx in chunk])).to(dev)
+            with torch.autocast(dev.type, enabled=dev.type == "cuda"):
+                o = model(t)
+            o = {k: v.float().cpu().numpy() for k, v in o.items()}
+            for n_, (y, xx) in enumerate(chunk):
+                acc["logits"][:, y:y + tile, xx:xx + tile] += o["sem"][n_] * wt
                 for k in ("dist", "orient", "heights"):
-                    acc[k][:, y:y + tile, xx:xx + tile] += o[k] * wt
+                    acc[k][:, y:y + tile, xx:xx + tile] += o[k][n_] * wt
                 wsum[y:y + tile, xx:xx + tile] += wt
     res = {k: (v / wsum)[:, :H, :W] for k, v in acc.items()}
-
     if return_logits:
         return res
-
-    # Prob из logits
-    prob = np.exp(res["logits"] - res["logits"].max(0)) / np.exp(res["logits"] - res["logits"].max(0)).sum(0)
-    res["prob"] = prob
-    del res["logits"]
-
+    lg = res.pop("logits")
+    e = np.exp(lg - lg.max(0))
+    res["prob"] = e / e.sum(0)
     n = np.linalg.norm(res["orient"], axis=0, keepdims=True)
     res["orient"] = res["orient"] / np.maximum(n, 1e-6)
     return res
@@ -155,12 +140,13 @@ def _overlay(x: np.ndarray, sem: np.ndarray, path: Path) -> None:
     cv2.imwrite(str(path), img.astype(np.uint8)[..., ::-1])
 
 
-def infer_input(model, dev, x: np.ndarray, out_dir, scene: dict | None = None, tile: int = 512, tta: bool = False) -> Path:
+def infer_input(model, dev, x: np.ndarray, out_dir, scene: dict | None = None, tile: int = 512, tta=False,
+                plan: bool = False, batch: int = 4, log=print) -> Path:
     import cv2
 
     d = Path(out_dir)
     d.mkdir(parents=True, exist_ok=True)
-    r = predict(model, dev, x.astype(np.float32), tile=tile, tta=tta)
+    r = predict(model, dev, x.astype(np.float32), tile=tile, tta=tta, batch=batch)
     sem = r["prob"].argmax(0).astype(np.uint8)
     cv2.imwrite(str(d / "sem.png"), sem)
     np.savez_compressed(d / "prob.npz", prob=r["prob"].astype(np.float16))
@@ -169,10 +155,14 @@ def infer_input(model, dev, x: np.ndarray, out_dir, scene: dict | None = None, t
     if scene is not None:
         (d / "scene.json").write_text(json.dumps(scene, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
     _overlay(x, sem, d / "pred.png")
+    if plan and scene is not None:
+        from .vectorize import main_vectorize
+
+        main_vectorize(d, d, log=log)
     return d
 
 
-def infer(ckpt, paths, out, tile: int = 512, tta: bool = False, log=print) -> list[str]:
+def infer(ckpt, paths, out, tile: int = 512, tta=False, plan: bool = False, batch: int = 4, log=print) -> list[str]:
     """paths: файлы E57 или каталоги уровней с input.npy (dataset real/... или scenes/...)."""
     from .netinput import affine, rasterize_e57
 
@@ -184,12 +174,14 @@ def infer(ckpt, paths, out, tile: int = 512, tta: bool = False, log=print) -> li
                 rel = f.parent.relative_to(p) if f.parent != p else Path(p.name)
                 sc = f.parent / "scene.json"
                 scene = json.loads(sc.read_text(encoding="utf-8")) if sc.exists() else None
-                done.append(str(infer_input(model, dev, np.load(f), Path(out) / rel, scene, tile, tta)))
+                done.append(str(infer_input(model, dev, np.load(f), Path(out) / rel, scene, tile, tta, plan, batch,
+                                            log)))
                 log(done[-1])
             continue
         for k, r in enumerate(rasterize_e57(p, log=log), 1):
             scene = {"source": p.name, "level": f"L{k}", "floor_z": r["level"]["floor_z"],
                      "ceiling_z": r["level"]["ceiling_z"], "frame": r["frame"], "pixel_to_world": affine(r["frame"])}
-            done.append(str(infer_input(model, dev, r["input"], Path(out) / p.stem / f"L{k}", scene, tile, tta)))
+            done.append(str(infer_input(model, dev, r["input"], Path(out) / p.stem / f"L{k}", scene, tile, tta, plan,
+                                        batch, log)))
             log(done[-1])
     return done
