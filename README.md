@@ -12,7 +12,8 @@
 - Weighted sampling: чаще кропы с проёмами
 - Focal Loss
 - Gradient accumulation для больших эффективных batch
-- Test-Time Augmentation (TTA): отражения с пересчётом ориентации
+- Test-Time Augmentation (TTA): `flip` (4 отражения) или `d4` (8: отражения и повороты на 90°)
+  с обратным пересчётом ориентации
 
 ## Установка
 
@@ -337,6 +338,9 @@ python -m simscan dataset real D:/scans/kvartira.e57 --out dataset              
 `orient.npy` ((cos 2θ, sin 2θ) на стенах и проёмах), `heights.npy` (низ и верх проёма / высота
 потолка), `vector.json` (стены, проёмы, помещения в метрах), `scene.json`, `preview.png`
 (вход с контурами разметки - проверка совмещения). Разбиение train/val/test - по планировкам.
+Неотсканированное не размечается (`ignore_unseen`, `scene.json: labels = labels-2`): помещение,
+пол или потолок которого виден меньше чем на 15 %, и его стены без точек ближе 30 см - ignore;
+видимые через дверь места, слепые круги под стоянками и тени мебели остаются размеченными.
 Загрузчик: `simscan/torchdata.py` (кропы, отражения и повороты на 90° с пересчётом ориентации,
 выпадение каналов; повороты на произвольный угол и прореживание - на облаке).
 
@@ -361,7 +365,7 @@ python -m simscan train --data dataset --out runs/r2 --epochs 60 --batch 8 \
 
 # применение к реальному E57 или к каталогам с input.npy
 python -m simscan infer runs/r1/best.pt kvartira.e57 --out pred
-python -m simscan infer runs/r1/best.pt kvartira.e57 --out pred --tta  # Test-Time Augmentation (4 отражения)
+python -m simscan infer runs/r1/best.pt kvartira.e57 --out pred --tta d4 --plan  # TTA (8 вариантов) + векторный план
 ```
 
 `make-dataset` продолжает с места обрыва. Скан на диск не пишется: растр строится из памяти теми же

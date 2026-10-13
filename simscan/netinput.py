@@ -34,6 +34,7 @@ from pathlib import Path
 import numpy as np
 
 RASTERIZER_VERSION = "netinput-1"
+LABELS_VERSION = "labels-2"           # labels-2: неотсканированные помещения - ignore (ignore_unseen)
 PIXEL_M = 0.02
 Z_BIN_M = 0.05                       # срез для долей занятости и вертикальности
 BAND_MARGIN_M = 0.1                  # от пола и потолка
@@ -369,9 +370,12 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
     H, W = frame["height"], frame["width"]
     lay = gt.layout
     rooms = np.zeros((H, W), np.uint8)
+    room_id = np.zeros((H, W), np.uint16)                 # номер помещения + 1 (ignore_unseen)
     for r in lay.rooms:
         for x0, y0, x1, y1 in r.rects():
-            _fill(rooms, gt.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]), frame)
+            q = gt.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+            _fill(rooms, q, frame)
+            _fill(room_id, q, frame, r.id + 1)
     body = np.zeros((H, W), np.uint8)                     # истинные тела стен (для граней)
     sem = np.zeros((H, W), np.uint8)
     sem[rooms > 0] = INTERIOR
@@ -504,7 +508,39 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
     ori[:, ~mask] = 0
     hts[:, ~np.isin(sem, (DOOR, WINDOW, OPENING))] = 0
     return {"sem": sem_out, "sem_raw": sem, "dist": dist, "orient": ori.astype(np.float16),
-            "heights": hts.astype(np.float16)}
+            "heights": hts.astype(np.float16), "room_id": room_id}
+
+
+def ignore_unseen(lab: dict, inp: np.ndarray, px: float, min_seen: float = 0.15, near_m: float = 0.3) -> int:
+    """Неотсканированное - не размечать. Помещение, у которого виден пол или потолок меньше
+    чем на min_seen его площади (закрытая неотсканированная комната), и прилегающие к нему
+    стены и проёмы без точек ближе near_m -> ignore: сеть не учится дорисовывать то, чего в
+    облаке нет (ТЗ). Видимые места такого помещения (через дверь) и слепые круги под
+    стоянками и тени от мебели в отсканированных помещениях остаются размеченными - их
+    восстановить можно. Возвращает число пикселей, ставших ignore."""
+    import cv2
+
+    x = np.asarray(inp, np.float32)
+    ev = ((x[0] > 0) | (x[1] > 0) | (x[2] > 0) | (x[3] > 0) | (x[4] > 0)).astype(np.uint8)
+    seen = (x[3] > 0) | (x[4] > 0)
+    rid = lab["room_id"]
+    n = int(rid.max()) + 1
+    area = np.bincount(rid.ravel(), minlength=n)
+    vis = np.bincount(rid.ravel(), seen.ravel(), minlength=n)
+    unseen = np.zeros(n, bool)
+    unseen[1:] = (area[1:] > 0) & (vis[1:] < min_seen * np.maximum(area[1:], 1))
+    if not unseen.any():
+        return 0
+    r = max(1, int(round(near_m / px)))
+    near = cv2.dilate(ev, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))) > 0
+    room_un = unseen[rid]
+    adj = cv2.dilate(room_un.astype(np.uint8), cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (4 * r + 1, 4 * r + 1))) > 0
+    sem = lab["sem"]
+    struct = np.isin(lab["sem_raw"], (WALL, DOOR, WINDOW, OPENING))
+    ign = ~near & ((room_un & (rid > 0)) | (struct & adj)) & (sem != IGNORE)
+    sem[ign] = IGNORE
+    return int(ign.sum())
 
 
 def _box_quad(b) -> np.ndarray:
@@ -654,6 +690,7 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
         d = root / "scenes" / scene_id / f"L{gt.level + 1}"
         d.mkdir(parents=True, exist_ok=True)
         lab = label_level(gt, r["frame"])
+        n_ign = ignore_unseen(lab, r["input"], px)
         np.save(d / "input.npy", r["input"])
         import cv2
 
@@ -668,7 +705,8 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
               "floor_z": r["level"]["floor_z"], "ceiling_z": r["level"]["ceiling_z"],
               "floor_z_gt": gt.floor_z, "ceiling_z_gt": gt.floor_z + gt.ceiling_h,
               "frame": r["frame"], "pixel_to_world": affine(r["frame"]), "rasterizer": RASTERIZER_VERSION,
-              "bare": meta.get("bare"), "aug": {"thin": thin, "z_shift": z_shift, "rot_deg": rot_deg}}
+              "bare": meta.get("bare"), "aug": {"thin": thin, "z_shift": z_shift, "rot_deg": rot_deg},
+              "labels": LABELS_VERSION, "ignored_unseen_px": n_ign}
         (d / "scene.json").write_text(json.dumps(sc, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
         _preview(r["input"].astype(np.float32), lab["sem_raw"], d / "preview.png")
         out_dirs.append(str(d))
