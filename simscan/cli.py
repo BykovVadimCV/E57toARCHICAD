@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 # тяжёлые зависимости (Open3D, pye57) импортируются внутри команд: inspect-e57 работает без них
@@ -97,6 +98,14 @@ def main(argv: list[str] | None = None) -> None:
     inf.add_argument("--out", required=True)
     inf.add_argument("--tile", type=int, default=512)
     inf.add_argument("--tta", action="store_true", help="Test-Time Augmentation: усреднение по 4 вариантам (flipH/V/HV), +1-2% IoU")
+    ev = sub.add_parser("evaluate", help="подробная оценка сети на val/test: report.json, levels.csv, графики")
+    ev.add_argument("ckpt", help="best.pt")
+    ev.add_argument("--data", required=True, help="корень датасета")
+    ev.add_argument("--split", default="test", choices=["train", "val", "test"])
+    ev.add_argument("--out", required=True, help="каталог отчёта")
+    ev.add_argument("--tta", action="store_true", help="Test-Time Augmentation (4 отражения)")
+    ev.add_argument("--tile", type=int, default=512)
+    ev.add_argument("--limit", type=int, help="не больше стольких уровней (быстрая проверка)")
     d = sub.add_parser("dump-config", help="напечатать конфигурацию по умолчанию (YAML)")
     d.add_argument("--config")
     pl = sub.add_parser("plans", help="только планировки + рендер (без сканирования)")
@@ -311,6 +320,13 @@ def main(argv: list[str] | None = None) -> None:
         print(out)
         return
 
+    if args.cmd == "evaluate":
+        from .evaluate import evaluate
+
+        rep = evaluate(args.ckpt, args.data, args.split, args.out, tta=args.tta, tile=args.tile, limit=args.limit)
+        print(json.dumps({k: rep[k] for k in ("levels", "miou_walls", "struct_iou", "struct_tol", "skeleton",
+                                              "openings")}, indent=1, ensure_ascii=False))
+        return
     if args.cmd == "vectorize":
         from pathlib import Path
 
