@@ -326,8 +326,14 @@ def _r(x, nd: int = 4):
 
 def level_tags(scene: dict) -> dict:
     w = (scene.get("realism") or {}).get("warp") or {}
+    old = not isinstance(w, dict)                      # матрица 2x2 - генератор до planwarp
+    if old:
+        w = {}
     aug = scene.get("aug") or {}
-    return {"мебель": "под отделку" if scene.get("bare") else "с мебелью",
+    gen = "нет данных" if "realism" not in scene else \
+        ("старый: без наклонов и дуг" if old else "с наклонами и дугами")
+    return {"генератор": gen,
+            "мебель": "под отделку" if scene.get("bare") else "с мебелью",
             "дуга": "есть" if w.get("arcs") else "нет",
             "наклоны стен": "есть" if w.get("grid") else "нет",
             "двухуровневая": "да" if scene.get("levels_in_scene", 1) > 1 else "нет",
