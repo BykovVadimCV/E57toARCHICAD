@@ -23,10 +23,14 @@
      1 м (пятно шума), огрызок с висящим концом короче 0,5 м, перемычка короче 25 см между
      двумя стенами (остаток утончения на стыке), короткая тень вдоль длинной стены (walls.tidy);
   6. проёмы: компоненты вероятности двери / окна / проёма (гистерезис), хозяин - ближайшая
-     стена; концы - проекция на её ось; низ и верх - медиана головы высот;
-  7. помещения: что сеть считает помещением, за вычетом стен (итоговых и маски); сужения уже
-     40 см рвутся - комнаты не сливаются через щели; контур - упрощённый.
-  Наружная стена - та, у которой за одной из граней улица.
+     стена; концы - проекция на её ось; низ и верх - медиана головы высот. Проём через стык
+     двух соединённых стен - они одна стена-ломаная, излом сохраняется (chain_at_openings);
+  7. помещения: где они - по сети (что сеть считает помещением, за вычетом стен; сужения уже
+     40 см рвутся - комнаты не сливаются), где их грани - по векторным стенам: область
+     дорастает в обход тел стен до их граней, контур - стороны на гранях стен, углы - их
+     пересечения (как у cellplan). Не замкнутое стенами (площадка за входной дверью) - вон.
+  Наружная стена - помещение с одной стороны, за другой по сети улица. Рисунок (plan.png,
+  plan.svg) - тот же, что у cellplan (floorplan.render).
 """
 from __future__ import annotations
 
@@ -36,11 +40,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .walls import join, merge_collinear, regularize, tidy
+from .walls import _unit, join, merge_collinear, regularize, tidy
 
 STRUCT = (2, 3, 4, 5)
 INTERIOR = (1, 6, 7)                 # помещение, мебель, проём перекрытия
 OPEN_KIND = {3: "door", 4: "window", 5: "opening"}
+OPEN_MIN_M = {"door": 0.55, "window": 0.3, "opening": 0.5}   # уже - обрывок, не проём
 
 P_HI, P_LO = 0.5, 0.3                # гистерезис конструкции
 MIN_WALL_M = 0.15                    # прямая короче - не стена
@@ -51,6 +56,7 @@ ARC_R = (1.5, 40.0)                  # радиусы дуг, м
 ARC_MIN_CHORD_M = 1.0                # дуга: хорда не короче,
 ARC_MIN_SAG_M = 0.08                 # стрела не меньше и окружность в 3 раза точнее прямой
 MIN_ROOM_M2 = 1.0
+MIN_ENCLOSED = 0.85                   # доля границы помещения на стенах и проёмах
 GAP_M = 0.5                          # закрываемый разрыв стены
 GAP_MAX_M = 0.8                      # и до стольких - если в щели есть хоть слабая конструкция
 
@@ -440,6 +446,52 @@ def _point_at(w: dict, s: float) -> np.ndarray:
     return pts[-1]
 
 
+def chain_at_openings(prob: np.ndarray, items: list, px: float, max_deg: float = 20.0) -> list:
+    """Проём сети через стык двух соединённых прямых (излом до max_deg) - одна стена-ломаная
+    с этим изломом (стены бывают кривыми - излом не выпрямляется), иначе проём достаётся
+    одной из них и обрезается по стыку. Проём должен заходить на обе стороны стыка."""
+    tol = 0.05 / px
+    cos_max = math.cos(math.radians(max_deg))
+    side = 0.1 / px
+    for c in OPEN_KIND:
+        for comp in _hysteresis(prob[c], min_px=max(6, int((0.25 / px) ** 2 / 4))):
+            ys, xs = np.nonzero(comp)
+            xy = np.c_[xs, ys].astype(float)
+            pair = None
+            for i, A in enumerate(items):
+                if pair or len(A["pts"]) != 2 or A.get("arc"):
+                    continue
+                for j, B in enumerate(items):
+                    if j <= i or pair or len(B["pts"]) != 2 or B.get("arc"):
+                        continue
+                    ends = [(ea, eb) for ea in (0, 1) for eb in (0, 1)
+                            if np.linalg.norm(A["pts"][ea] - B["pts"][eb]) <= tol + (A["t"] + B["t"]) / 2]
+                    if not ends:
+                        continue
+                    ea, eb = ends[0]
+                    u = A["pts"][ea] - A["pts"][1 - ea]
+                    v = B["pts"][1 - eb] - B["pts"][eb]
+                    if u @ v < cos_max * np.linalg.norm(u) * np.linalg.norm(v):
+                        continue
+                    J = (A["pts"][ea] + B["pts"][eb]) / 2
+                    ua, ub = _unit(u), _unit(v)
+                    da, db = _project(A, xy)[1], _project(B, xy)[1]
+                    on_a = (da <= A["t"] / 2 + 0.25 / px) & ((xy - J) @ ua < -side)
+                    on_b = (db <= B["t"] / 2 + 0.25 / px) & ((xy - J) @ ub > side)
+                    if on_a.sum() >= 0.05 * len(xy) and on_b.sum() >= 0.05 * len(xy):
+                        pair = (i, j, ea, eb, J)
+            if pair:
+                i, j, ea, eb, J = pair
+                A, B = items[i], items[j]
+                la = float(np.linalg.norm(A["pts"][1] - A["pts"][0]))
+                lb = float(np.linalg.norm(B["pts"][1] - B["pts"][0]))
+                new = dict(A if la >= lb else B)
+                new["pts"] = np.array([A["pts"][1 - ea], J, B["pts"][1 - eb]], float)
+                new["t"] = (A["t"] * la + B["t"] * lb) / max(la + lb, 1e-9)
+                items = [w for k, w in enumerate(items) if k not in (i, j)] + [new]
+    return items
+
+
 def openings(prob: np.ndarray, heights: np.ndarray | None, items: list, px: float, ceil_m: float) -> list[dict]:
     out = []
     for c, kind in OPEN_KIND.items():
@@ -475,17 +527,247 @@ def openings(prob: np.ndarray, heights: np.ndarray | None, items: list, px: floa
             p["s"] = (p["s"][0], max(p["s"][1], o["s"][1]))
         else:
             merged.append(o)
-    return merged
+    return [o for o in merged if (o["s"][1] - o["s"][0]) * px >= OPEN_MIN_M[o["kind"]]]
 
 
-def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float) -> list[np.ndarray]:
-    """Помещения -> контуры (j, i). Свободное = то, что сеть считает помещением, за вычетом
-    преграды (итоговые стены с толщиной + маска конструкции: стены закрывают дыры маски,
-    маска - несомкнутые углы стен). Затравки - свободное, сжатое на 20 см (сужения и щели уже
-    40 см рвутся, комнаты не сливаются); остальное свободное - к ближайшей затравке
-    геодезическим ростом."""
+def _wall_body(w: dict, ext=(0.0, 0.0)) -> np.ndarray | None:
+    """Тело прямой стены - четырёхугольник по оси ± полутолщина, концы продлены на ext."""
+    if len(w["pts"]) != 2 or w.get("arc"):
+        return None
+    a, b = np.asarray(w["pts"][0], float), np.asarray(w["pts"][1], float)
+    d = (b - a) / max(float(np.linalg.norm(b - a)), 1e-9)
+    n = np.array([-d[1], d[0]]) * w["t"] / 2
+    a, b = a - d * ext[0], b + d * ext[1]
+    return np.array([a + n, b + n, b - n, a - n])
+
+
+def _barrier(items: list, shape, up: int) -> np.ndarray:
+    """Тела стен в растре в up раз мельче пикселя сети (грани помещений - по ним). Конец,
+    упёртый в другую стену, продлевается на её полутолщину - до её дальней грани, не дальше
+    (иначе толстая стена в T-стыке с тонкой торчит в помещение)."""
     import cv2
 
+    from .walls import _dist_to_wall
+
+    H, W = shape
+    bar = np.zeros((H * up, W * up), np.uint8)
+    sh = 4                                                  # подпиксельные координаты cv2
+    for w in items:
+        ext = []
+        for e in (w["pts"][0], w["pts"][-1]):
+            near = [B["t"] / 2 for B in items if B is not w and _dist_to_wall(np.asarray(e, float), B) <= (w["t"] + B["t"]) / 2 + 1.0]
+            ext.append(max(near) if near else 0.0)
+        for e, x in zip((w["pts"][0], w["pts"][-1]), ext):     # стык: клин между телами - тоже стена
+            if x > 0:
+                c = (np.asarray(e, float) + 0.5) * up - 0.5
+                cv2.circle(bar, tuple(np.round(c * (1 << sh)).astype(int)), int(round(max(x, w["t"] / 2) * up * (1 << sh))),
+                           1, -1, cv2.LINE_8, sh)
+        q = _wall_body(w, ext)
+        if q is not None:
+            q = ((q + 0.5) * up - 0.5) * (1 << sh)
+            cv2.fillPoly(bar, [np.round(q).astype(np.int32)], 1, cv2.LINE_8, sh)
+        else:
+            q = (np.asarray(w["pts"]) + 0.5) * up - 0.5
+            cv2.polylines(bar, [np.round(q).astype(np.int32)], False, 1, max(1, int(round(w["t"] * up))))
+    return bar
+
+
+def _line_x(p0, p1, q0, q1):
+    """Пересечение прямых p0p1 и q0q1 (None - почти параллельны)."""
+    u, v = p1 - p0, q1 - q0
+    den = u[0] * v[1] - u[1] * v[0]
+    if abs(den) < 0.3 * np.linalg.norm(u) * np.linalg.norm(v):
+        return None
+    r = q0 - p0
+    return p0 + u * (r[0] * v[1] - r[1] * v[0]) / den
+
+
+def clean_outline(m: np.ndarray, P, eps_m: float = 0.015, short_m: float = 0.12, jog_m: float = 0.05,
+                  col_deg: float = 3.0) -> np.ndarray:
+    """Контур области -> чистый многоугольник: упрощение с допуском eps_m; почти соосные
+    соседние стороны (до col_deg) - одна; короткая сторона (до short_m) на стыке двух
+    непараллельных граней - угол в их пересечении; ступенька до jog_m между параллельными - вон.
+    Грани помещения - грани стен, поэтому многоугольник выходит из немногих длинных сторон."""
+    import cv2
+
+    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    c = max(cnts, key=cv2.contourArea)
+    q = cv2.approxPolyDP(c, max(1.0, P(eps_m)), True)[:, 0, :].astype(float)
+    sin_col = math.sin(math.radians(col_deg))
+    for _ in range(50):
+        n = len(q)
+        if n <= 3:
+            break
+        changed = False
+        for i in range(n):                                  # соосные стороны
+            a, b, c_ = q[i - 1], q[i], q[(i + 1) % n]
+            u, v = b - a, c_ - b
+            lu, lv = np.linalg.norm(u), np.linalg.norm(v)
+            if lu > 1e-9 and lv > 1e-9 and abs(u[0] * v[1] - u[1] * v[0]) / (lu * lv) < sin_col and u @ v > 0:
+                q = np.delete(q, i, axis=0)
+                changed = True
+                break
+        if changed:
+            continue
+        for i in range(n):                                  # короткая сторона q[i] -> q[i+1]
+            a0, a1 = q[i - 1], q[i]
+            b0, b1 = q[(i + 1) % n], q[(i + 2) % n]
+            L = float(np.linalg.norm(b0 - a1))
+            if L >= P(short_m):
+                continue
+            x = _line_x(a0, a1, b0, b1)
+            if x is not None and np.linalg.norm(x - (a1 + b0) / 2) <= L + P(0.03):     # дальше - шип
+                q[i] = x
+                q = np.delete(q, (i + 1) % n, axis=0)
+                changed = True
+                break
+            if x is None and L <= P(jog_m):                  # ступенька между параллельными
+                q = np.delete(q, [i, (i + 1) % n], axis=0)
+                changed = True
+                break
+        if not changed:
+            break
+    return q
+
+
+def _faces(items: list, margin: float) -> list:
+    """Грани стен: по прямой каждого участка оси ± полутолщина -> (точка, направление, от, до)."""
+    out = []
+    for w in items:
+        p = np.asarray(w["pts"], float)
+        for a, b in zip(p[:-1], p[1:]):
+            L = float(np.linalg.norm(b - a))
+            if L < 1e-6:
+                continue
+            d = (b - a) / L
+            n = np.array([-d[1], d[0]])
+            for sg in (1, -1):
+                out.append((a + n * sg * w["t"] / 2, d, -margin, L + margin))
+    return out
+
+
+def snap_outline(poly: np.ndarray, items: list, px: float, tol_m: float = 0.04, ang_deg: float = 5.0) -> np.ndarray:
+    """Стороны контура помещения -> на грани стен (ближе tol_m, угол до ang_deg); соседние
+    стороны на одной грани - одна; угол - пересечение граней соседних сторон (параллельных -
+    прямоугольная ступенька); непривязанные стороны до 40 см между двумя гранями (щель на
+    стыке) - вон. Как у cellplan: грань
+    помещения - грань стены. Если результат странный - исходный контур."""
+    F = _faces(items, 0.15 / px)
+    tol, sin_a = tol_m / px, math.sin(math.radians(ang_deg))
+    n = len(poly)
+
+    def face_of(p, q):
+        u = q - p
+        L = float(np.linalg.norm(u))
+        if L < 1e-9:
+            return None
+        u = u / L
+        best = None
+        for k, (c, d, s0, s1) in enumerate(F):
+            if abs(u[0] * d[1] - u[1] * d[0]) > sin_a:
+                continue
+            nrm = np.array([-d[1], d[0]])
+            dp, dq = abs((p - c) @ nrm), abs((q - c) @ nrm)
+            sp, sq = (p - c) @ d, (q - c) @ d
+            if max(dp, dq) > tol or max(sp, sq) < s0 or min(sp, sq) > s1:
+                continue
+            if best is None or dp + dq < best[1]:
+                best = (k, dp + dq)
+        return None if best is None else best[0]
+
+    edges = [[poly[i], poly[(i + 1) % n], face_of(poly[i], poly[(i + 1) % n])] for i in range(n)]
+    merged = []                                         # подряд на одной грани - одна сторона
+    for e in edges:
+        if merged and e[2] is not None and merged[-1][2] == e[2]:
+            merged[-1][1] = e[1]
+        else:
+            merged.append(e)
+    if len(merged) > 1 and merged[0][2] is not None and merged[0][2] == merged[-1][2]:
+        merged[0][0] = merged[-1][0]
+        merged.pop()
+
+    def line_x(f, g):
+        (c1, d1, *_), (c2, d2, *_) = F[f], F[g]
+        den = d1[0] * d2[1] - d1[1] * d2[0]
+        if abs(den) < 0.2:
+            return None
+        r = c2 - c1
+        return c1 + d1 * (r[0] * d2[1] - r[1] * d2[0]) / den
+
+    # щели на стыках: цепочка непривязанных сторон до run_m между двумя гранями - вон
+    run_m = 0.4 / px
+    while len(merged) > 3:
+        m = len(merged)
+        cut = None
+        for i in range(m):
+            if merged[i][2] is None or merged[(i + 1) % m][2] is not None:
+                continue
+            j, L = (i + 1) % m, 0.0
+            while merged[j][2] is None and L <= run_m and j != i:
+                L += float(np.linalg.norm(merged[j][1] - merged[j][0]))
+                j = (j + 1) % m
+            if merged[j][2] is not None and j != i and L <= run_m:
+                cut = (i, j)
+                break
+        if cut is None:
+            break
+        i, j = cut
+        drop = []
+        k = (i + 1) % len(merged)
+        while k != j:
+            drop.append(k)
+            k = (k + 1) % len(merged)
+        merged = [e for k, e in enumerate(merged) if k not in drop]
+    out = []
+    m = len(merged)
+    for i in range(m):
+        a, b = merged[i], merged[(i + 1) % m]
+        if a[2] is not None and b[2] is not None:
+            x = line_x(a[2], b[2])
+            if x is not None and np.linalg.norm(x - (a[1] + b[0]) / 2) <= 0.5 / px:
+                out.append(x)
+                continue
+            if x is None:                                # параллельные - прямоугольная ступенька
+                c, d, *_ = F[a[2]]
+                v = c + d * ((a[1] - c) @ d)
+                c2, d2, *_ = F[b[2]]
+                out += [v, c2 + d2 * ((v - c2) @ d2)]
+                continue
+        for v, f in ((a[1], a[2]), (b[0], b[2])):        # свободная сторона - проекции на грани
+            if f is not None:
+                c, d, *_ = F[f]
+                out.append(c + d * ((v - c) @ d))
+            else:
+                out.append(v)
+    q = [out[0]]
+    for v in out[1:]:
+        if np.linalg.norm(v - q[-1]) > 0.01 / px:
+            q.append(v)
+    if len(q) > 1 and np.linalg.norm(q[0] - q[-1]) <= 0.01 / px:
+        q.pop()
+    q = np.array(q)
+    area = lambda z: 0.5 * abs(float(z[:, 0] @ np.roll(z[:, 1], -1) - z[:, 1] @ np.roll(z[:, 0], -1)))  # noqa: E731
+    if len(q) < 3 or abs(area(q) - area(poly)) > 0.05 * area(poly):
+        return poly
+    return q
+
+
+def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float, up: int = 4):
+    """Помещения: где они - по сети, где их грани - по стенам.
+    1. затравки - то, что сеть считает помещением, за вычетом преграды (итоговые стены + маска
+       конструкции), сжатое на 20 см (щели уже 40 см рвутся, комнаты не сливаются); остальное
+       свободное - к ближайшей затравке геодезическим ростом;
+    2. вон - меньше MIN_ROOM_M2 и не замкнутое стенами: граница меньше чем на MIN_ENCLOSED
+       проходит по стенам и проёмам (площадка за входной дверью, кусок улицы: у комнат 0,98-1,0,
+       у площадки на реальном скане 0,62);
+    3. область помещения - в растре в up раз мельче дорастает в обход тел векторных стен (до
+       15 см): помещение доходит ровно до их граней;
+    4. контур - clean_outline, затем snap_outline: стороны - на гранях стен, углы - их
+       пересечения, щели на стыках - вон.
+    -> ([{poly, faces, label}] в пикселях сети, растр меток up, up)."""
+    import cv2
+
+    H, W = prob.shape[1:]
     bar = mask.astype(np.uint8).copy()
     for w in items:
         cv2.polylines(bar, [np.round(w["pts"]).astype(np.int32)], False, 1, max(2, int(round(w["t"]))))
@@ -504,19 +786,74 @@ def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float) -> list[np
         if not tgt.any():
             break
         lab[tgt] = grow[tgt]
-    out = []
+    good = []
     for k in np.unique(lab):
-        if k == 0:
-            continue
         m = (lab == k).astype(np.uint8)
-        if m.sum() * px * px < MIN_ROOM_M2:
+        if k == 0 or m.sum() * px * px < MIN_ROOM_M2:
             continue
-        m = cv2.dilate(m, k3, iterations=max(1, int(round(0.03 / px))))        # до грани стены
-        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        c = max(cnts, key=cv2.contourArea)
-        poly = cv2.approxPolyDP(c, max(1.0, 0.02 / px), True)[:, 0, :].astype(float)
-        if len(poly) >= 3:
-            out.append(poly)
+        ring = (cv2.dilate(m, k3) > 0) & (m == 0)
+        if ring.any() and bar[ring].mean() < MIN_ENCLOSED:
+            continue                                       # граница - не по стенам: не помещение
+        good.append(k)
+    lab = np.where(np.isin(lab, good), lab, 0)
+    # п. 3: метки - в мелкий растр, до граней стен
+    lab_up = cv2.resize(lab.astype(np.float32), (W * up, H * up), interpolation=cv2.INTER_NEAREST)
+    wall_up = _barrier(items, (H, W), up) > 0
+    lab_up[wall_up] = 0
+    # рост в обход стен (не сквозь тонкую стену и не за её оборванный конец дальше 15 см)
+    kc = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+    for _ in range(int(round(0.15 / px * up))):
+        grow = cv2.dilate(lab_up, kc)
+        tgt = (lab_up == 0) & ~wall_up & (grow > 0)
+        if not tgt.any():
+            break
+        lab_up[tgt] = grow[tgt]
+    lab_up = lab_up.astype(np.int32)
+    out, lab_fin = [], np.zeros_like(lab_up)
+    ko = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * int(round(0.04 / px * up)) + 1,) * 2)
+    for k in good:
+        # размыкание: щели между телами стен на стыках (пальцы в 2-5 см) - не помещение;
+        # скруглённые им углы clean_outline вернёт пересечением граней
+        m = cv2.morphologyEx((lab_up == k).astype(np.uint8), cv2.MORPH_OPEN, ko)
+        nm, cl = cv2.connectedComponents(m, connectivity=4)
+        if nm < 2:
+            continue
+        sizes = np.bincount(cl.ravel())
+        sizes[0] = 0
+        m = (cl == sizes.argmax()).astype(np.uint8)
+        if m.sum() * (px / up) ** 2 < MIN_ROOM_M2:
+            continue
+        poly = clean_outline(m, lambda v: v / px * up)
+        if len(poly) < 3:
+            continue
+        dm = cv2.distanceTransform(m, cv2.DIST_L2, 5)
+        y0, x0 = np.unravel_index(int(dm.argmax()), dm.shape)
+        to_px = lambda q: (np.asarray(q, float) + 0.5) / up - 0.5          # noqa: E731
+        poly = (snap_outline(to_px(poly), items, px) + 0.5) * up - 0.5
+        faces = [{"kind": "line", "a": to_px(poly[k]), "b": to_px(poly[(k + 1) % len(poly)])} for k in range(len(poly))]
+        lab_fin[m > 0] = len(out) + 1
+        out.append({"poly": to_px(poly), "faces": faces, "label": to_px([x0, y0])})
+    return out, lab_fin, up
+
+
+def wall_rooms(items: list, lab_up: np.ndarray, up: int, px: float) -> list[list[int]]:
+    """Помещения по сторонам каждой стены (номера с 0): метки в 6 см за гранями вдоль оси."""
+    Hu, Wu = lab_up.shape
+    out = []
+    for w in items:
+        p = np.asarray(w["pts"], float)
+        seg = []
+        for a, b in zip(p[:-1], p[1:]):
+            d = (b - a) / max(float(np.linalg.norm(b - a)), 1e-9)
+            nrm = np.array([-d[1], d[0]])
+            for t in np.linspace(0.1, 0.9, 9):
+                for sg in (1, -1):
+                    q = a + (b - a) * t + sg * nrm * (w["t"] / 2 + 0.06 / px)
+                    j, i = int(round((q[0] + 0.5) * up - 0.5)), int(round((q[1] + 0.5) * up - 0.5))
+                    if 0 <= i < Hu and 0 <= j < Wu and lab_up[i, j] > 0:
+                        seg.append(int(lab_up[i, j]) - 1)
+        cnt = np.bincount(seg) if seg else np.zeros(0)
+        out.append([int(k) for k in np.flatnonzero(cnt >= 3)])
     return out
 
 
@@ -590,25 +927,30 @@ def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.nd
 
     regularize(items, P=P)
     items = merge(GAP_M)
-    join(items, P, free_reach_m=GAP_M)
+    join(items, P, free_reach_m=GAP_M, bridge_ok=bridge_ok)
     regularize(items, P=P)
     items = merge(0.05)
     items = [w for w in items if np.linalg.norm(w["pts"][-1] - w["pts"][0]) * px >= MIN_WALL_M or w.get("arc")]
-    items = tidy(items, P, reach_m=GAP_M)
+    items = tidy(items, P, reach_m=GAP_M, bridge_ok=bridge_ok)
     items = merge(0.05)                                     # стыки после чистки - соосные куски впритык
+    items = chain_at_openings(prob, items, px)
     ops = openings(prob, heights, items, px, ceil_m)
-    room_polys = rooms(prob, items, mask, px)
+    room_list, lab_up, up = rooms(prob, items, mask, px)
+    w_rooms = wall_rooms(items, lab_up, up, px)
 
     def to_w(xy):
         xy = np.atleast_2d(xy)
         return (M @ np.c_[xy, np.ones(len(xy))].T).T
 
     lvl = str(scene.get("level", "L1"))
+    room_id = [f"{lvl}-R{k + 1}" for k in range(len(room_list))]
     walls_out = []
     for k, w in enumerate(items):
         pts = to_w(w["pts"])
+        # наружная: помещение с одной стороны, за другой по сети улица
+        outer = len(w_rooms[k]) < 2 and bool(is_outer(prob, w, px))
         rec = {"id": f"{lvl}-W{k + 1}", "points": pts.round(3).tolist(), "thickness": round(w["t"] * px, 3),
-               "is_outer": bool(is_outer(prob, w, px)), "rooms": [],
+               "is_outer": outer, "rooms": [room_id[r] for r in w_rooms[k]],
                "length": round(float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum()), 3)}
         if w.get("arc"):
             rec["arc"] = {"center": to_w(w["arc"]["c"])[0].round(3).tolist(), "radius": round(w["arc"]["r"] * px, 3)}
@@ -621,12 +963,23 @@ def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.nd
                         "a": a.round(3).tolist(), "b": b.round(3).tolist(),
                         "width": round(float(np.linalg.norm(b - a)), 3), "sill": o["sill"], "head": o["head"]})
     rooms_out = []
-    for k, poly in enumerate(room_polys):
-        q = to_w(poly)
+    for k, R in enumerate(room_list):
+        q = to_w(R["poly"])
         area = 0.5 * abs(float(q[:, 0] @ np.roll(q[:, 1], -1) - q[:, 1] @ np.roll(q[:, 0], -1)))
         per = float(np.linalg.norm(q - np.roll(q, -1, 0), axis=1).sum())
-        rooms_out.append({"id": f"{lvl}-R{k + 1}", "name": f"Помещение {k + 1}", "points": q.round(3).tolist(),
-                          "area": round(area, 2), "perimeter": round(per, 2)})
+        faces = [{"kind": f["kind"], "a": to_w(f["a"])[0].round(3).tolist(), "b": to_w(f["b"])[0].round(3).tolist(),
+                  **({"center": to_w(f["c"])[0].round(3).tolist(), "radius": round(f["r"] * px, 3)}
+                     if f["kind"] == "arc" else {})} for f in R["faces"]]
+        rooms_out.append({"id": room_id[k], "name": f"Помещение {k + 1}", "points": q.round(3).tolist(),
+                          "area": round(area, 2), "perimeter": round(per, 2),
+                          "label_xy": to_w(R["label"])[0].round(3).tolist(), "faces": faces})
+    order = sorted(range(len(rooms_out)), key=lambda i: -rooms_out[i]["area"])   # большие - первыми
+    ren = {rooms_out[i]["id"]: f"{lvl}-R{n + 1}" for n, i in enumerate(order)}
+    rooms_out = [rooms_out[i] for i in order]
+    for n, r in enumerate(rooms_out):
+        r["id"], r["name"] = ren[r["id"]], f"Помещение {n + 1}"
+    for w in walls_out:
+        w["rooms"] = [ren[x] for x in w["rooms"]]
     log(f"{lvl}: стен {len(walls_out)} (кусков скелета {n0}), дуг {sum('arc' in w for w in walls_out)}, "
         f"проёмов {len(ops_out)}, помещений {len(rooms_out)}")
     frame = dict(scene.get("frame") or {})
@@ -645,40 +998,99 @@ def save_json(plan: dict, path) -> None:
     Path(path).write_text(json.dumps(plan, indent=1, ensure_ascii=False), encoding="utf-8")
 
 
-def _draw(plan: dict, path, svg: bool) -> None:
-    import matplotlib
+def _inside(pt, poly) -> bool:
+    x, y = pt
+    q = np.asarray(poly, float)
+    xi, yi, xj, yj = q[:, 0], q[:, 1], np.roll(q[:, 0], 1), np.roll(q[:, 1], 1)
+    c = ((yi > y) != (yj > y)) & (x < (xj - xi) * (y - yi) / np.where(yj == yi, 1e-12, yj - yi) + xi)
+    return bool(c.sum() % 2)
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Polygon
 
-    fig, ax = plt.subplots(figsize=(10, 10))
-    for r in plan["rooms"]:
-        ax.add_patch(Polygon(r["points"], closed=True, fc="#e8f1fa", ec="none"))
-        c = np.mean(r["points"], axis=0)
-        ax.text(c[0], c[1], f"{r['area']:.1f} м²", ha="center", va="center", fontsize=7, color="#555")
-    for w in plan["walls"]:
-        p = np.asarray(w["points"])
-        lw = max(1.0, w["thickness"] * 72 / 0.0254 / 100 * 0.35)
-        ax.plot(p[:, 0], p[:, 1], color="#c04040" if w["is_outer"] else "#303030", lw=lw, solid_capstyle="butt")
-    col = {"door": "#d6604d", "window": "#4393c3", "opening": "#f4a582"}
+def level_plan(plan: dict):
+    """plan.json (vectorize) -> floorplan.LevelPlan для того же рисунка, что у cellplan: тела
+    стен (концы в стыках - до дальней грани соседа), проёмы на всю толщину стены, створка
+    двери - как принято: из прихожей (помещение с наибольшим числом дверей) внутрь комнаты,
+    у санузла и кладовой (до 4,5 м²) - наружу, входная - внутрь квартиры."""
+    from .floorplan import LevelPlan, Opening, Room, WallSegment
+    from .walls import _dist_to_wall
+
+    W = [{"pts": np.asarray(w["points"], float), "t": float(w["thickness"])} for w in plan["walls"]]
+    by_id = {w["id"]: (w, W[k]) for k, w in enumerate(plan["walls"])}
+    rooms = plan.get("rooms", [])
+    lp = LevelPlan(int(str(plan.get("level", "L1")).lstrip("L") or 1), float(plan.get("floor_z", 0.0)),
+                   float(plan.get("ceiling_z", 2.7)))
+    for w, d in zip(plan["walls"], W):
+        lp.walls.append(WallSegment(w["id"], w["points"], w.get("rooms", []), w["thickness"], w["is_outer"],
+                                    w["length"]))
+        p = d["pts"]
+        for k in range(len(p) - 1):
+            ext = [0.0, 0.0]
+            for e, end in ((0, k == 0), (1, k == len(p) - 2)):
+                if not end:
+                    continue
+                near = [B["t"] / 2 for B in W if B is not d and _dist_to_wall(p[k + e], B) <= (d["t"] + B["t"]) / 2 + 0.05]
+                ext[e] = max(near) if near else 0.0
+            q = _wall_body({"pts": p[k:k + 2], "t": d["t"]}, ext)
+            if q is not None:
+                lp.slab.append(q.tolist())
+        for v in p[1:-1]:                                  # излом ломаной - без щели
+            a = np.linspace(0, 2 * math.pi, 13)[:-1]
+            lp.slab.append((v + d["t"] / 2 * np.c_[np.cos(a), np.sin(a)]).tolist())
+    def sides(o):
+        w, d = by_id[o["wall_id"]]
+        a, b = np.asarray(o["a"], float), np.asarray(o["b"], float)
+        u = (b - a) / max(float(np.linalg.norm(b - a)), 1e-9)
+        n = np.array([-u[1], u[0]])
+        c = (a + b) / 2
+        return n, [next((r for r in rooms if _inside(c + sg * n * (d["t"] / 2 + 0.3), r["points"])), None)
+                   for sg in (1, -1)]
+
+    n_doors = {}
     for o in plan["openings"]:
-        a, b = np.asarray(o["a"]), np.asarray(o["b"])
-        ax.plot([a[0], b[0]], [a[1], b[1]], color=col.get(o["opening_type"], "k"), lw=4, solid_capstyle="butt")
-    ax.set_aspect("equal")
-    ax.axis("off")
-    ax.set_title(f"{plan['level']}: стен {len(plan['walls'])}, проёмов {len(plan['openings'])}, "
-                 f"помещений {len(plan['rooms'])}", fontsize=10)
-    fig.savefig(path, dpi=110, bbox_inches="tight", format="svg" if svg else "png")
-    plt.close(fig)
+        if o["opening_type"] == "door":
+            for r in sides(o)[1]:
+                if r:
+                    n_doors[r["id"]] = n_doors.get(r["id"], 0) + 1
+    for o in plan["openings"]:
+        w, d = by_id[o["wall_id"]]
+        a, b = np.asarray(o["a"], float), np.asarray(o["b"], float)
+        n, rs = sides(o)
+
+        def score(r):                                      # куда открывается: больше - туда
+            if r is None:
+                return -1e9                                # наружу из квартиры - нет
+            if r["area"] < 4.5:
+                return -1e6                                # санузел, кладовая - наружу
+            return -n_doors.get(r["id"], 0) * 1e3 + r["area"]
+
+        if score(rs[0]) > score(rs[1]):                    # створка - против n: n - от помещения створки
+            n = -n
+        t = d["t"]
+        quad = [a - n * t / 2, b - n * t / 2, b + n * t / 2, a + n * t / 2]
+        kind = "gap" if o["opening_type"] == "opening" else o["opening_type"]
+        lp.openings.append(Opening(o["id"], kind, o["wall_id"], o["a"], o["b"], [q.tolist() for q in quad],
+                                   o["width"], o.get("sill"), o.get("head")))
+    for r in rooms:
+        lab = r.get("label_xy") or np.mean(r["points"], axis=0).tolist()
+        lp.rooms.append(Room(r["id"], r["name"], r["points"], r["area"], r["perimeter"], tuple(lab),
+                             r.get("faces", [])))
+    return lp
+
+
+def render_plan(plan: dict, path, title: str = "") -> None:
+    """Рисунок плана - как у cellplan (floorplan.render): помещения с площадями, тела стен,
+    окна, двери со створками, ширины проёмов, таблица. Формат - по расширению (png, svg)."""
+    from .floorplan import render
+
+    render(level_plan(plan), None, {}, Path(path), title=title, wall_label="стена (ось ± полутолщина)")
 
 
 def save_png(plan: dict, path) -> None:
-    _draw(plan, path, False)
+    render_plan(plan, path)
 
 
 def save_svg(plan: dict, path) -> None:
-    _draw(plan, path, True)
+    render_plan(plan, path)
 
 
 def main_vectorize(pred_dir, out_dir, log=print) -> dict:

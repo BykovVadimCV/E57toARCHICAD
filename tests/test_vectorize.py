@@ -30,8 +30,8 @@ def _scene(tmp_path, noisy: bool):
     t = np.linspace(-1, 1, 41)
     arc_y = 2.0 + t * 2.0
     arc_x = -(np.sqrt(r * r - (arc_y - 2.0) ** 2) - (r - sag))       # левая стена - дуга наружу (x < 0)
-    inner = np.vstack([np.c_[arc_x + 0.05, arc_y][::-1], [[6.0 - 0.05, 4.0 - 0.05], [6.0 - 0.05, 0.05]]])
-    inner[0, 1], inner[-1, 1] = 3.95, 0.05
+    inner = np.vstack([np.c_[arc_x + 0.05, arc_y], [[6.0 - 0.05, 4.0 - 0.05], [6.0 - 0.05, 0.05]]])
+    inner[0, 1], inner[len(arc_y) - 1, 1] = 0.05, 3.95       # обход как у outer: дуга снизу вверх
     sem = np.zeros((H, W), np.uint8)
     cv2.fillPoly(sem, [np.round(to_px(inner)).astype(np.int32)], 1)
     band = 5                                                        # 10 см
@@ -106,3 +106,55 @@ def test_plan_is_clean(tmp_path, noisy):
     # помещения: два, слева больше (дуга добавляет площадь)
     areas = sorted(r["area"] for r in plan["rooms"])
     assert len(areas) == 2 and areas[1] > areas[0] * 1.2, areas
+
+
+def test_kinked_wall_window_and_open_area(tmp_path):
+    """Наружная стена с изломом 14° и окном через излом: окно целиком на одной стене, излом не
+    выпрямлен (стена - ломаная или дуга); пятно «помещения» снаружи, не замкнутое стенами
+    (площадка за дверью), - не помещение."""
+    W, H = 300, 260
+    sem = np.zeros((H, W), np.uint8)
+    room = np.array([[40, 40], [200, 40], [210, 120], [200, 200], [40, 200]])   # правая стена с изломом 14°
+    cv2.fillPoly(sem, [room], 1)
+    cv2.polylines(sem, [room], True, 2, 6)
+    win = np.array([[205, 80], [210, 120], [205, 160]]) * 4      # окно 1,6 м по стене, через излом
+    cv2.polylines(sem, [np.round(win).astype(np.int32)], False, 4, 6, cv2.LINE_8, 2)
+    cv2.ellipse(sem, (120, 235), (60, 15), 0, 0, 360, 1, -1)    # площадка снаружи
+    logit = np.stack([(sem == k).astype(np.float32) for k in range(8)]) * 6
+    prob = np.exp(logit - logit.max(0))
+    prob /= prob.sum(0, keepdims=True)
+    np.savez_compressed(tmp_path / "prob.npz", prob=prob.astype(np.float16))
+    sc = {"level": "L1", "floor_z": 0.0, "ceiling_z": 2.7, "frame": {"width": W, "height": H},
+          "pixel_to_world": [[PX, 0.0, 0.5 * PX], [0.0, -PX, (H - 0.5) * PX]]}
+    (tmp_path / "scene.json").write_text(json.dumps(sc), encoding="utf-8")
+    plan = vectorize(tmp_path, log=lambda *a: None)
+    assert len(plan["rooms"]) == 1, [r["area"] for r in plan["rooms"]]
+    r = plan["rooms"][0]
+    assert abs(r["area"] - 3.0 * 3.1) < 0.6, r
+    win = [o for o in plan["openings"] if o["opening_type"] == "window"]
+    assert len(win) == 1 and abs(win[0]["width"] - 1.6) < 0.12, win
+    host = next(w for w in plan["walls"] if w["id"] == win[0]["wall_id"])
+    assert len(host["points"]) >= 3                             # излом сохранён
+
+
+def test_chain_at_openings():
+    """Две прямые с изломом 8°, окно сети через стык -> одна стена-ломаная с тем же изломом."""
+    from simscan.vectorize import chain_at_openings
+
+    H, W = 120, 220
+    J = np.array([110.0, 60.0])
+    a = J + np.array([-100.0, -100.0 * math.tan(math.radians(8))])
+    b = J + np.array([100.0, 0.0])
+    items = [{"pts": np.array([a, J]), "t": 6.0}, {"pts": np.array([J, b]), "t": 6.0}]
+    prob = np.zeros((8, H, W), np.float32)
+    prob[0] = 1
+    win = np.zeros((H, W), np.uint8)
+    cv2.polylines(win, [np.round(np.array([a + (J - a) * 0.6, J, J + (b - J) * 0.4])).astype(np.int32)], False, 1, 6)
+    prob[4][win > 0], prob[0][win > 0] = 1, 0
+    out = chain_at_openings(prob, items, PX)
+    assert len(out) == 1 and len(out[0]["pts"]) == 3
+    assert np.allclose(out[0]["pts"][0], a) and np.allclose(out[0]["pts"][1], J) and np.allclose(out[0]["pts"][2], b)
+    far = np.zeros((H, W), np.uint8)                           # окно целиком на одной прямой - не трогать
+    cv2.line(far, tuple(np.round(J + (b - J) * 0.3).astype(int)), tuple(np.round(J + (b - J) * 0.8).astype(int)), 1, 6)
+    prob[4], prob[0] = far.astype(np.float32), 1 - far
+    assert len(chain_at_openings(prob, [dict(w) for w in items], PX)) == 2

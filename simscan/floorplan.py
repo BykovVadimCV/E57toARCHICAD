@@ -745,7 +745,8 @@ ROOM_TINTS = ("#dce9f8", "#fbe3d6", "#d6f0e5", "#fbefcc", "#f8e1ea", "#d9ecd9", 
 WALL, WALL_FILL = "#1f1f1f", "#8a8a8a"
 
 
-def render(plan: LevelPlan, ras: Rasters, masks: dict, path: Path, title: str = "") -> None:
+def render(plan: LevelPlan, ras: Rasters, masks: dict, path: Path, title: str = "",
+           wall_label: str = "толща стены между видимыми гранями") -> None:
     from matplotlib.patches import Arc, Patch, Polygon
 
     from .debug import AQUA, INK, INK2, ORANGE, SURFACE, _plt
@@ -825,7 +826,7 @@ def render(plan: LevelPlan, ras: Rasters, masks: dict, path: Path, title: str = 
             hs.append(f"верх {o.head:.2f}")
         lines.append(f"{kind:<6} {o.width * 1000:5.0f} мм  {' '.join(hs)}".replace(".", ","))
     side.text(0, 1, "\n".join(lines), va="top", ha="left", fontsize=8.5, family="monospace", color=INK)
-    side.legend(handles=[Patch(color=WALL_FILL, label="толща стены между видимыми гранями"),
+    side.legend(handles=[Patch(color=WALL_FILL, label=wall_label),
                          Patch(facecolor=SURFACE, edgecolor=AQUA, label="окно"),
                          Patch(color=ORANGE, label="дверь")],
                 loc="lower left", frameon=False, fontsize=9)
