@@ -29,6 +29,10 @@
      40 см рвутся - комнаты не сливаются), где их грани - по векторным стенам: область
      дорастает в обход тел стен до их граней, контур - стороны на гранях стен, углы - их
      пересечения (как у cellplan). Не замкнутое стенами (площадка за входной дверью) - вон.
+  Стена, не ограничивающая ни одного помещения (терраса, соседнее неотснятое), - вон; кроме
+  короткого (до 1 м) выступа, упёртого в стену помещения.
+  Короткая косая стена - чаще след утончения на углу ниши или пилястра: прямоугольный
+  вариант, если сеть подтверждает его не хуже (square_short).
   Наружная стена - помещение с одной стороны, за другой по сети улица. Рисунок (plan.png,
   plan.svg) - тот же, что у cellplan (floorplan.render).
 """
@@ -40,7 +44,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .walls import _unit, join, merge_collinear, regularize, tidy
+from .walls import _dist_to_wall, _unit, join, merge_collinear, regularize, tidy
 
 STRUCT = (2, 3, 4, 5)
 INTERIOR = (1, 6, 7)                 # помещение, мебель, проём перекрытия
@@ -446,6 +450,156 @@ def _point_at(w: dict, s: float) -> np.ndarray:
     return pts[-1]
 
 
+def _support(p_struct: np.ndarray, a, b) -> float:
+    """Средняя вероятность конструкции по отрезку оси."""
+    n = max(2, int(np.linalg.norm(b - a)) + 1)
+    q = np.round(a + (b - a) * np.linspace(0, 1, n)[:, None]).astype(int)
+    q[:, 0] = np.clip(q[:, 0], 0, p_struct.shape[1] - 1)
+    q[:, 1] = np.clip(q[:, 1], 0, p_struct.shape[0] - 1)
+    return float(p_struct[q[:, 1], q[:, 0]].mean())
+
+
+def square_short(items: list, p_struct: np.ndarray, px: float, max_m: float = 0.8, par_deg: float = 5.0,
+                 keep_deg: float = 10.0, slack: float = 0.05) -> list:
+    """Короткая косая стена - чаще всего след утончения на углу ниши или пилястра: скелет
+    срезает прямой угол диагональю. Вместо неё пробуется прямоугольный вариант:
+      связка между двумя параллельными стенами (боковина ниши, эркера) - ступенька поперёк,
+        положение - где вдоль ступеньки сеть сильнее всего видит конструкцию; концы обеих
+        стен - до ступеньки;
+      огрызок, упёртый одним концом в стену (пилястр, выступ), - перпендикуляр к ней из той
+        точки, где перпендикуляр лучше всего подтверждён сетью;
+      обход из двух коротких стен между двумя соосными - прямой участок.
+    Прямоугольный вариант берётся, если сеть подтверждает его не хуже диагонали (с запасом
+    slack): настоящая косая стенка (трапециевидный эркер) остаётся косой."""
+    from .walls import _dist_to_wall
+
+    sin_par = math.sin(math.radians(par_deg))
+    sin_keep = math.sin(math.radians(keep_deg))
+    for A in items:
+        if len(A["pts"]) != 2 or A.get("arc"):
+            continue
+        a, b = A["pts"]
+        L = float(np.linalg.norm(b - a))
+        if L < 1e-6 or L > max_m / px:
+            continue
+        u = (b - a) / L
+        att = []
+        for e, p in ((0, a), (1, b)):
+            best = None
+            for B in items:
+                if B is A or len(B["pts"]) != 2 or B.get("arc"):
+                    continue
+                d = _dist_to_wall(p, B)
+                if d <= (A["t"] + B["t"]) / 2 + 0.05 / px and (best is None or d < best[0]):
+                    best = (d, B)
+            att.append(best[1] if best else None)
+        base = _support(p_struct, a, b)
+        if att[0] is not None and att[1] is not None and att[0] is not att[1]:
+            B, C = att
+            v = _unit(B["pts"][1] - B["pts"][0])
+            w = _unit(C["pts"][1] - C["pts"][0])
+            if abs(v[0] * w[1] - v[1] * w[0]) > sin_par:   # не параллельные - это скос (tidy)
+                continue
+            if abs(u @ v) < sin_keep:                      # и так поперёк
+                continue
+            n = np.array([-v[1], v[0]])
+            cb, cc = B["pts"][0], C["pts"][0]
+            if abs((cc - cb) @ n) < max(B["t"], C["t"]) / 2 + 0.03 / px:
+                continue                                   # соосные - не ступенька (это стык, merge)
+            sa, sb = (a - cb) @ v, (b - cb) @ v
+            best = None
+            for s_ in np.linspace(min(sa, sb), max(sa, sb), max(2, int(abs(sb - sa)) + 1)):
+                p0 = cb + v * s_
+                p1 = p0 + n * ((cc - p0) @ n)
+                sc = _support(p_struct, p0, p1)
+                if best is None or sc > best[0]:
+                    best = (sc, p0, p1)
+            if best is None or best[0] < base - slack:
+                continue
+            _, p0, p1 = best
+            for W_, end_pt, q in ((B, a, p0), (C, b, p1)):  # концы стен - до ступеньки
+                k = int(np.argmin([np.linalg.norm(W_["pts"][0] - end_pt), np.linalg.norm(W_["pts"][1] - end_pt)]))
+                W_["pts"][k] = q.copy()
+            A["pts"] = np.array([p0, p1])
+        elif (att[0] is None) != (att[1] is None) or att[0] is att[1]:   # огрызок: корень на стене
+            if att[0] is att[1]:                           # толстый короткий (пилястр): оба конца у одной стены
+                B = att[0]
+                e = 0 if _dist_to_wall(a, B) <= _dist_to_wall(b, B) else 1
+            else:
+                e = 0 if att[0] is not None else 1
+                B = att[e]
+            v = _unit(B["pts"][1] - B["pts"][0])
+            if abs(u @ v) < sin_keep or abs(u @ v) > math.cos(math.radians(25)):
+                continue                                   # уже поперёк или почти вдоль (продолжение, не выступ)
+            n = np.array([-v[1], v[0]])
+            root, tip = (a, b) if e == 0 else (b, a)
+            h = (tip - root) @ n                           # вылет от стены
+            if abs(h) < 0.1 / px:
+                continue
+            cb = B["pts"][0]
+            s0, s1 = sorted(((root - cb) @ v, (tip - cb) @ v))
+            best = None
+            for s_ in np.linspace(s0, s1, max(2, int(s1 - s0) + 1)):
+                p0 = cb + v * s_ + n * ((root - cb) @ n)
+                sc = _support(p_struct, p0, p0 + n * h)
+                if best is None or sc > best[0]:
+                    best = (sc, p0)
+            if best is None or best[0] < base - slack:
+                continue
+            A["pts"] = np.array([best[1], best[1] + n * h]) if e == 0 else np.array([best[1] + n * h, best[1]])
+    return _straighten_detours(items, p_struct, px, max_m, sin_par, slack)
+
+
+def _straighten_detours(items, p_struct, px, max_m, sin_par, slack) -> list:
+    """Обход из двух коротких стен («галочка» у пилястра или пятна) между двумя соосными
+    стенами -> прямой участок, если сеть подтверждает его не хуже обхода."""
+    from .walls import _dist_to_wall
+
+    def short(w):
+        return len(w["pts"]) == 2 and not w.get("arc") and np.linalg.norm(w["pts"][1] - w["pts"][0]) <= max_m / px
+
+    def host(p, excl):
+        best = None
+        for B in items:
+            if any(B is x for x in excl) or len(B["pts"]) != 2 or B.get("arc"):
+                continue
+            d = _dist_to_wall(p, B)
+            if d <= B["t"] / 2 + 0.05 / px and (best is None or d < best[0]):
+                best = (d, B)
+        return best[1] if best else None
+
+    changed = True
+    while changed:
+        changed = False
+        for i, A1 in enumerate(items):
+            if changed or not short(A1):
+                continue
+            for A2 in items:
+                if A2 is A1 or not short(A2):
+                    continue
+                shared = [(e1, e2) for e1 in (0, 1) for e2 in (0, 1)
+                          if np.linalg.norm(A1["pts"][e1] - A2["pts"][e2]) <= 0.05 / px]
+                if not shared:
+                    continue
+                e1, e2 = shared[0]
+                p, q = A1["pts"][1 - e1], A2["pts"][1 - e2]
+                B, C = host(p, (A1, A2)), host(q, (A1, A2))
+                if B is None or C is None:
+                    continue
+                v, w = _unit(B["pts"][1] - B["pts"][0]), _unit(C["pts"][1] - C["pts"][0])
+                if abs(v[0] * w[1] - v[1] * w[0]) > sin_par or abs((q - p) @ np.array([-v[1], v[0]])) > B["t"]:
+                    continue                               # не соосные
+                chain = (_support(p_struct, *A1["pts"]) + _support(p_struct, *A2["pts"])) / 2
+                if _support(p_struct, p, q) < chain - slack:
+                    continue
+                new = dict(B)
+                new["pts"] = np.array([p, q], float)
+                items = [x for x in items if x is not A1 and x is not A2] + [new]
+                changed = True
+                break
+    return items
+
+
 def chain_at_openings(prob: np.ndarray, items: list, px: float, max_deg: float = 20.0) -> list:
     """Проём сети через стык двух соединённых прямых (излом до max_deg) - одна стена-ломаная
     с этим изломом (стены бывают кривыми - излом не выпрямляется), иначе проём достаётся
@@ -837,23 +991,25 @@ def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float, up: int = 
 
 
 def wall_rooms(items: list, lab_up: np.ndarray, up: int, px: float) -> list[list[int]]:
-    """Помещения по сторонам каждой стены (номера с 0): метки в 6 см за гранями вдоль оси."""
+    """Помещения по сторонам каждой стены (номера с 0): метки в 6 см за гранями, точки - через
+    каждые 25 см оси (длинная стена вдоль нескольких комнат видит каждую)."""
     Hu, Wu = lab_up.shape
     out = []
     for w in items:
         p = np.asarray(w["pts"], float)
         seg = []
         for a, b in zip(p[:-1], p[1:]):
-            d = (b - a) / max(float(np.linalg.norm(b - a)), 1e-9)
+            L = float(np.linalg.norm(b - a))
+            d = (b - a) / max(L, 1e-9)
             nrm = np.array([-d[1], d[0]])
-            for t in np.linspace(0.1, 0.9, 9):
+            for t in np.linspace(0.05, 0.95, max(9, int(L * px / 0.25))):
                 for sg in (1, -1):
                     q = a + (b - a) * t + sg * nrm * (w["t"] / 2 + 0.06 / px)
                     j, i = int(round((q[0] + 0.5) * up - 0.5)), int(round((q[1] + 0.5) * up - 0.5))
                     if 0 <= i < Hu and 0 <= j < Wu and lab_up[i, j] > 0:
                         seg.append(int(lab_up[i, j]) - 1)
         cnt = np.bincount(seg) if seg else np.zeros(0)
-        out.append([int(k) for k in np.flatnonzero(cnt >= 3)])
+        out.append([int(k) for k in np.flatnonzero(cnt >= 2)])
     return out
 
 
@@ -932,11 +1088,31 @@ def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.nd
     items = merge(0.05)
     items = [w for w in items if np.linalg.norm(w["pts"][-1] - w["pts"][0]) * px >= MIN_WALL_M or w.get("arc")]
     items = tidy(items, P, reach_m=GAP_M, bridge_ok=bridge_ok)
+    items = square_short(items, p_struct, px)               # ниши и пилястры - прямоугольные
     items = merge(0.05)                                     # стыки после чистки - соосные куски впритык
     items = chain_at_openings(prob, items, px)
-    ops = openings(prob, heights, items, px, ceil_m)
     room_list, lab_up, up = rooms(prob, items, mask, px)
     w_rooms = wall_rooms(items, lab_up, up, px)
+    if room_list and not all(w_rooms):
+        # стена, не ограничивающая ни одного помещения (терраса, соседнее неотснятое), - вон;
+        # короткий (до 1 м) выступ, упёртый в стену помещения (торец перегородки, ребро), - остаётся
+        from .walls import connected_ends
+
+        con = connected_ends(items, P)
+        bound = [bool(r) for r in w_rooms]
+        keep = []
+        for k, w in enumerate(items):
+            L = float(np.linalg.norm(np.diff(w["pts"], axis=0), axis=1).sum()) * px
+            touches = any(_dist_to_wall(e, B) <= (w["t"] + B["t"]) / 2 + 0.05 / px
+                          for e in (w["pts"][0], w["pts"][-1]) for B, ok in zip(items, bound) if ok and B is not w)
+            if bound[k] or (L <= 1.0 and any(con[k]) and touches):
+                keep.append(k)
+        items = [items[k] for k in keep]
+        join(items, P, free_reach_m=GAP_M, bridge_ok=bridge_ok)   # соседи - снова в угол
+        items = [w for w in items if np.linalg.norm(w["pts"][-1] - w["pts"][0]) * px >= MIN_WALL_M or w.get("arc")]
+        room_list, lab_up, up = rooms(prob, items, mask, px)
+        w_rooms = wall_rooms(items, lab_up, up, px)
+    ops = openings(prob, heights, items, px, ceil_m)
 
     def to_w(xy):
         xy = np.atleast_2d(xy)

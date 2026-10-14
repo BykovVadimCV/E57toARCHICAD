@@ -158,3 +158,60 @@ def test_chain_at_openings():
     cv2.line(far, tuple(np.round(J + (b - J) * 0.3).astype(int)), tuple(np.round(J + (b - J) * 0.8).astype(int)), 1, 6)
     prob[4], prob[0] = far.astype(np.float32), 1 - far
     assert len(chain_at_openings(prob, [dict(w) for w in items], PX)) == 2
+
+
+def _niche_scene(d, noisy: bool, rot_deg: float = 7.0):
+    """Комната 6 x 4 м (повёрнута): в верхней стене две ниши-эркера 0,8 x 0,4 м с окном в
+    задней стенке, пилястр 0,3 x 0,4 м у левой стены, снаружи слева - терраса со своей
+    стеной, не ограничивающей помещений."""
+    W, H = 520, 340
+    a = math.radians(rot_deg)
+    R = np.array([[math.cos(a), -math.sin(a)], [math.sin(a), math.cos(a)]])
+    c0 = np.array([290.0, 180.0])
+
+    def q(pts):
+        p = ((np.asarray(pts, float) - [3, 2]) / PX) @ R.T
+        return np.round(np.c_[c0[0] + p[:, 0], c0[1] - p[:, 1]] * 16).astype(np.int32)
+
+    t = 0.15
+    inner = [[0, 0], [6, 0], [6, 4], [4.6, 4], [4.6, 4.4], [3.8, 4.4], [3.8, 4], [2.2, 4], [2.2, 4.4], [1.4, 4.4],
+             [1.4, 4], [0, 4]]
+    outer = [[-t, -t], [6 + t, -t], [6 + t, 4 + t], [4.6 + t, 4 + t], [4.6 + t, 4.4 + t], [3.8 - t, 4.4 + t],
+             [3.8 - t, 4 + t], [2.2 + t, 4 + t], [2.2 + t, 4.4 + t], [1.4 - t, 4.4 + t], [1.4 - t, 4 + t], [-t, 4 + t]]
+    sem = np.zeros((H, W), np.uint8)
+    cv2.fillPoly(sem, [q(outer)], 2, cv2.LINE_8, 4)
+    cv2.fillPoly(sem, [q(inner)], 1, cv2.LINE_8, 4)
+    for x0, x1 in ((1.45, 2.15), (3.85, 4.55)):
+        cv2.fillPoly(sem, [q([[x0, 4.4], [x1, 4.4], [x1, 4.4 + t], [x0, 4.4 + t]])], 4, cv2.LINE_8, 4)
+    cv2.fillPoly(sem, [q([[0, 1.5], [0.3, 1.5], [0.3, 1.9], [0, 1.9]])], 2, cv2.LINE_8, 4)
+    cv2.fillPoly(sem, [q([[-1.5, 1.0], [-1.5 + t, 1.0], [-1.5 + t, 3.5], [-1.5, 3.5]])], 2, cv2.LINE_8, 4)
+    cv2.fillPoly(sem, [q([[-1.5 + t, 1.0], [-t, 1.0], [-t, 3.5], [-1.5 + t, 3.5]])], 1, cv2.LINE_8, 4)
+    logit = np.stack([(sem == k).astype(np.float32) for k in range(8)]) * 6
+    if noisy:
+        rng = np.random.default_rng(0)
+        logit = np.stack([cv2.GaussianBlur(c, (0, 0), 1.2) + cv2.GaussianBlur(
+            rng.normal(0, 1, (H, W)).astype(np.float32), (0, 0), 3) * 2.5 for c in logit])
+    prob = np.exp(logit - logit.max(0))
+    prob /= prob.sum(0, keepdims=True)
+    np.savez_compressed(d / "prob.npz", prob=prob.astype(np.float16))
+    sc = {"level": "L1", "floor_z": 0.0, "ceiling_z": 2.7, "frame": {"width": W, "height": H},
+          "pixel_to_world": [[PX, 0.0, 0.5 * PX], [0.0, -PX, (H - 0.5) * PX]]}
+    (d / "scene.json").write_text(json.dumps(sc), encoding="utf-8")
+    return rot_deg
+
+
+@pytest.mark.parametrize("noisy", [False, True])
+def test_niches_square_and_stray_walls_dropped(tmp_path, noisy):
+    """Боковины ниш - поперёк стены, а не диагонали; стена террасы (не ограничивает помещений)
+    - вон; два окна в нишах; одно помещение."""
+    rot = _niche_scene(tmp_path, noisy)
+    plan = vectorize(tmp_path, log=lambda *a: None)
+    assert len(plan["rooms"]) == 1
+    for w in plan["walls"]:
+        p = np.asarray(w["points"])
+        assert w["rooms"] or w["length"] <= 1.0, w                 # ничейных длинных нет
+        for a, b in zip(p[:-1], p[1:]):
+            ang = math.degrees(math.atan2(b[1] - a[1], b[0] - a[0])) - rot
+            assert abs((ang + 45) % 90 - 45) < 3.0, (w["id"], p.round(2).tolist())   # всё по осям комнаты
+    win = [o for o in plan["openings"] if o["opening_type"] == "window"]
+    assert len(win) == 2 and all(abs(o["width"] - 0.7) < 0.15 for o in win), win
