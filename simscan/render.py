@@ -34,10 +34,16 @@ def _font(size: int):
 
 
 class _Canvas:
+    """Холст плана; деформация плана сцены (planwarp: сдвиг, наклоны, дуги) - здесь же."""
+
     def __init__(self, layout: Layout, px_per_m: float, margin_m: float, ss: int):
         from PIL import Image, ImageDraw
 
-        x0, y0, x1, y1 = layout.bbox()
+        from .groundtruth import warped_bbox
+        from .planwarp import layout_warp
+
+        self.W = layout_warp(layout)
+        x0, y0, x1, y1 = warped_bbox(layout)
         self.k = px_per_m * ss
         self.ox, self.oy = x0 - margin_m, y1 + margin_m
         w = int((x1 - x0 + 2 * margin_m) * self.k)
@@ -46,15 +52,22 @@ class _Canvas:
         self.d = ImageDraw.Draw(self.img)
         self.ss = ss
 
-    def p(self, x, y):
+    def _px(self, x, y):
         return ((x - self.ox) * self.k, (self.oy - y) * self.k)
 
+    def p(self, x, y):
+        if self.W is not None:
+            x, y = self.W([x, y])[0]
+        return self._px(x, y)
+
     def poly(self, pts, fill=None, outline=None, width=1):
-        self.d.polygon([self.p(*q) for q in pts], fill=fill, outline=outline,
+        q = np.asarray(pts, float) if self.W is None else self.W.poly(pts, 0.05)
+        self.d.polygon([self._px(*v) for v in q], fill=fill, outline=outline,
                        width=max(1, int(width * self.ss)) if outline else 0)
 
     def line(self, a, b, fill, width=1.0):
-        self.d.line([self.p(*a), self.p(*b)], fill=fill, width=max(1, int(round(width * self.ss))))
+        q = np.array([a, b], float) if self.W is None else self.W.poly([a, b], 0.05, closed=False)
+        self.d.line([self._px(*v) for v in q], fill=fill, width=max(1, int(round(width * self.ss))))
 
 
 def _rect(wall: Wall, s0, s1, o0, o1):
@@ -90,6 +103,17 @@ def _box_pts(b: Box):
     hx, hy = b.size[0] / 2, b.size[1] / 2
     return [(b.center[0] + u * c - v * s, b.center[1] + u * s + v * c)
             for u, v in ((-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy))]
+
+
+def _room_area(room, W) -> float:
+    """Площадь помещения; при деформации плана - по образам прямоугольников."""
+    if W is None:
+        return room.area
+    tot = 0.0
+    for x0, y0, x1, y1 in room.rects():
+        q = W.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], 0.05)
+        tot += 0.5 * abs(float(q[:, 0] @ np.roll(q[:, 1], -1) - q[:, 1] @ np.roll(q[:, 0], -1)))
+    return tot
 
 
 def _label_point(room):
@@ -170,11 +194,12 @@ def render_plan(layout: Layout, out_png: str | Path, px_per_m: float = 60.0,
 
     # подписи
     f_name, f_area = _font(int(0.22 * k)), _font(int(0.2 * k))
+    areas = {r.id: _room_area(r, cv.W) for r in layout.rooms}
     for r in layout.rooms:
         x, y = _label_point(r)
         name = r.name or {"room": "Комната", "kitchen": "Кухня", "bath": "Санузел",
                           "corridor": "Коридор", "balcony": "Балкон"}.get(r.kind, r.kind)
-        area = f"{r.area:.1f}".replace(".", ",") + " м²"
+        area = f"{areas[r.id]:.1f}".replace(".", ",") + " м²"
         px, py = cv.p(x, y)
         cv.d.text((px, py - 0.14 * k), name, fill=(30, 30, 30), font=f_name, anchor="mm")
         cv.d.text((px, py + 0.16 * k), area, fill=(80, 80, 80), font=f_area, anchor="mm")
@@ -198,7 +223,7 @@ def render_plan(layout: Layout, out_png: str | Path, px_per_m: float = 60.0,
     cv.line((sx, sy), (sx + 1.0, sy), (0, 0, 0), 2)
     cv.d.text(cv.p(sx + 0.5, sy - 0.18), "1 м", fill=(0, 0, 0), font=f_dim, anchor="mm")
 
-    total = sum(r.area for r in layout.rooms if r.kind != "balcony")
+    total = sum(areas[r.id] for r in layout.rooms if r.kind != "balcony")
     head = title or _title(layout, total)
     cv.d.text(cv.p(x0, y1 + 0.75), head, fill=(0, 0, 0), font=_font(int(0.26 * k)), anchor="lm")
 

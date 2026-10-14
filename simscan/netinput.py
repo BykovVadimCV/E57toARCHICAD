@@ -34,6 +34,7 @@ from pathlib import Path
 import numpy as np
 
 RASTERIZER_VERSION = "netinput-1"
+LABELS_VERSION = "labels-2"           # labels-2: неотсканированные помещения - ignore (ignore_unseen)
 PIXEL_M = 0.02
 Z_BIN_M = 0.05                       # срез для долей занятости и вертикальности
 BAND_MARGIN_M = 0.1                  # от пола и потолка
@@ -321,16 +322,29 @@ class SceneGT:
         meta = self.doc.get("meta", {})
         w = meta.get("layout_to_world", {})
         self.world = WorldTransform(w.get("yaw_deg", 0.0), tuple(w.get("offset_m", (0.0, 0.0, 0.0))))
-        A = meta.get("warp")
-        self.A = np.eye(2) if A is None else np.asarray(A, float)
+        from .planwarp import PlanWarp
+
+        self.warp = PlanWarp(meta.get("warp"))            # сдвиг, наклоны линий стен, дуги
+        self.A = self.warp.A
         self.floor_z = float(self.world.offset[2]) + float(lv.get("z0", 0.0))
         self.ceiling_h = float(self.layout.ceiling_height)
         self.rot = None                    # аугментация: облако повёрнуто (градусы, cx, cy)
 
     def xy(self, pts) -> np.ndarray:
-        """План (x, y) -> мир (x, y)."""
-        p = np.atleast_2d(np.asarray(pts, float))[:, :2] @ self.A.T
+        """План (x, y) -> мир (x, y) (точки)."""
+        p = self.warp(pts)
         return rotate_xy(self.world.to_world(np.c_[p, np.zeros(len(p))])[:, :2], self.rot)
+
+    def poly(self, pts, closed: bool = True) -> np.ndarray:
+        """Контур плана -> мир; при нелинейной деформации стороны сгущаются (дуги, изломы)."""
+        p = self.warp.poly(pts, 0.05, closed)
+        return rotate_xy(self.world.to_world(np.c_[p, np.zeros(len(p))])[:, :2], self.rot)
+
+    def dir2(self, w, s0: float, s1: float) -> tuple[float, float]:
+        """(cos 2θ, sin 2θ) участка стены s0..s1 в мире."""
+        d = np.diff(self.xy([w.point(s0), w.point(s1)]), axis=0)[0]
+        t = math.atan2(d[1], d[0])
+        return math.cos(2 * t), math.sin(2 * t)
 
     def stations(self) -> np.ndarray:
         """Стоянки этого этажа (мир)."""
@@ -340,7 +354,7 @@ class SceneGT:
 
     # стена: прямоугольник по оси s и смещению поперёк (в СК плана) -> мир
     def wall_quad(self, w, s0, s1, o0, o1) -> np.ndarray:
-        return self.xy([w.point(s0, o0), w.point(s1, o0), w.point(s1, o1), w.point(s0, o1)])
+        return self.poly([w.point(s0, o0), w.point(s1, o0), w.point(s1, o1), w.point(s0, o1)])
 
     def inner_offsets(self, w) -> tuple[float, float]:
         """Поперёк стены: (внутренняя грань, грань + 10 см наружу) - для наружной стены."""
@@ -356,20 +370,47 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
     H, W = frame["height"], frame["width"]
     lay = gt.layout
     rooms = np.zeros((H, W), np.uint8)
+    room_id = np.zeros((H, W), np.uint16)                 # номер помещения + 1 (ignore_unseen)
     for r in lay.rooms:
         for x0, y0, x1, y1 in r.rects():
-            _fill(rooms, gt.xy([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]), frame)
+            q = gt.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+            _fill(rooms, q, frame)
+            _fill(room_id, q, frame, r.id + 1)
     body = np.zeros((H, W), np.uint8)                     # истинные тела стен (для граней)
     sem = np.zeros((H, W), np.uint8)
     sem[rooms > 0] = INTERIOR
     ori = np.zeros((2, H, W), np.float32)
     hts = np.zeros((2, H, W), np.float32)
 
-    def wall_dir(w):
-        d = gt.xy([w.p1])[0] - gt.xy([w.p0])[0]
-        t = math.atan2(d[1], d[0])
-        return math.cos(2 * t), math.sin(2 * t)
+    curved = not gt.warp.linear
+    piece_id = np.zeros((H, W), np.int32)                 # нелинейная деформация: кусок стены
+    piece_dir = [(0.0, 0.0)]                              # -> его направление
 
+    def wall_dir(w):
+        return gt.dir2(w, 0.0, w.length)
+
+    def set_dir(m, w):
+        """Ориентация на пикселях m стены w: по оси или по кускам (наклоны, дуги)."""
+        if not curved:
+            c, s = wall_dir(w)
+            ori[0][m], ori[1][m] = c, s
+            return
+        k = piece_id[m]
+        dirs = np.asarray(piece_dir, np.float32)[k]
+        own = k > 0
+        if not own.all():                                  # кусков нет - направление всей стены
+            dirs[~own] = wall_dir(w)
+        ori[0][m], ori[1][m] = dirs[:, 0], dirs[:, 1]
+
+    if curved:                                            # куски по 10 см со своим направлением
+        for w in lay.walls:
+            s0, s1 = -w.ext0, w.length + w.ext1
+            n = max(1, int(math.ceil((s1 - s0) / 0.1)))
+            for k in range(n):
+                a, b = s0 + (s1 - s0) * k / n, s0 + (s1 - s0) * (k + 1) / n
+                piece_dir.append(gt.dir2(w, a, b))
+                _fill(piece_id, gt.wall_quad(w, a, b, -w.thickness / 2 - 0.01, w.thickness / 2 + 0.01), frame,
+                      len(piece_dir) - 1)
     walls_px = {}
     for w in lay.walls:
         s0, s1 = -w.ext0, w.length + w.ext1
@@ -394,16 +435,22 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
     for w in lay.walls:
         m = walls_px[w.id]
         sem[m] = WALL
-        c, s = wall_dir(w)
-        ori[0][m], ori[1][m] = c, s
+        set_dir(m, w)
     # колонны и пилястры - на плане стены
     for it in lay.items:
         if it.label == "column":
             for b in it.boxes:
                 q = _box_quad(b)
                 m = np.zeros((H, W), np.uint8)
-                _fill(m, gt.xy(q), frame)
+                _fill(m, gt.poly(q), frame)
                 sem[m > 0] = WALL
+                # направление - по длинной стороне (пилястра вдоль стены)
+                u = 0.0 if b.size[0] >= b.size[1] else math.pi / 2
+                c0 = np.asarray(b.center[:2], float)
+                e = 0.05 * np.array([math.cos(b.yaw + u), math.sin(b.yaw + u)])
+                dv = np.diff(gt.xy([c0 - e, c0 + e]), axis=0)[0]
+                t = math.atan2(dv[1], dv[0])
+                ori[0][m > 0], ori[1][m > 0] = math.cos(2 * t), math.sin(2 * t)
     # проёмы: след в теле стены (той же глубины, что размеченная стена), по ширине проёма
     for o in lay.openings:
         w = lay.wall(o.wall_id)
@@ -417,8 +464,7 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
         _fill(m, q, frame)
         m = (m > 0) & (walls_px[w.id] | (sem == WALL))
         sem[m] = cls
-        c, s = wall_dir(w)
-        ori[0][m], ori[1][m] = c, s
+        set_dir(m, w)
         hts[0][m] = (0.0 if cls != WINDOW else o.z0) / gt.ceiling_h
         hts[1][m] = min(o.z1, top_wall) / gt.ceiling_h
     # мебель, радиаторы, короба, мусор - поверх свободного
@@ -427,13 +473,13 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
         if it.label not in CLUTTER_LABELS or it.kind in CLUTTER_SKIP_KINDS:
             continue
         for b in it.boxes:
-            _fill(clutter, gt.xy(_box_quad(b)), frame)
+            _fill(clutter, gt.poly(_box_quad(b)), frame)
         for pr in it.prims:
             t = pr.get("type")
             if t == "mesh":
                 from .layout import Box
 
-                _fill(clutter, gt.xy(_box_quad(Box(tuple(pr["center"]), tuple(pr["size"]), pr.get("yaw", 0.0)))),
+                _fill(clutter, gt.poly(_box_quad(Box(tuple(pr["center"]), tuple(pr["size"]), pr.get("yaw", 0.0)))),
                       frame)
             elif t == "cylinder":
                 c = np.asarray(pr["center"], float)
@@ -444,7 +490,7 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
     # проём в перекрытии (верхний этаж) и лестница под ним (нижний) - duplex.py
     for x0, y0, x1, y1 in lay.meta.get("void_rects", []):
         m = np.zeros((H, W), np.uint8)
-        _fill(m, gt.xy([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]), frame)
+        _fill(m, gt.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]), frame)
         sem[(m > 0) & np.isin(sem, (INTERIOR, CLUTTER))] = VOID
     # расстояние до видимой грани: граница тела стены (с проёмами) с помещением
     solid = (body > 0) | np.isin(sem, (WALL, DOOR, WINDOW, OPENING))
@@ -462,7 +508,39 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
     ori[:, ~mask] = 0
     hts[:, ~np.isin(sem, (DOOR, WINDOW, OPENING))] = 0
     return {"sem": sem_out, "sem_raw": sem, "dist": dist, "orient": ori.astype(np.float16),
-            "heights": hts.astype(np.float16)}
+            "heights": hts.astype(np.float16), "room_id": room_id}
+
+
+def ignore_unseen(lab: dict, inp: np.ndarray, px: float, min_seen: float = 0.15, near_m: float = 0.3) -> int:
+    """Неотсканированное - не размечать. Помещение, у которого виден пол или потолок меньше
+    чем на min_seen его площади (закрытая неотсканированная комната), и прилегающие к нему
+    стены и проёмы без точек ближе near_m -> ignore: сеть не учится дорисовывать то, чего в
+    облаке нет (ТЗ). Видимые места такого помещения (через дверь) и слепые круги под
+    стоянками и тени от мебели в отсканированных помещениях остаются размеченными - их
+    восстановить можно. Возвращает число пикселей, ставших ignore."""
+    import cv2
+
+    x = np.asarray(inp, np.float32)
+    ev = ((x[0] > 0) | (x[1] > 0) | (x[2] > 0) | (x[3] > 0) | (x[4] > 0)).astype(np.uint8)
+    seen = (x[3] > 0) | (x[4] > 0)
+    rid = lab["room_id"]
+    n = int(rid.max()) + 1
+    area = np.bincount(rid.ravel(), minlength=n)
+    vis = np.bincount(rid.ravel(), seen.ravel(), minlength=n)
+    unseen = np.zeros(n, bool)
+    unseen[1:] = (area[1:] > 0) & (vis[1:] < min_seen * np.maximum(area[1:], 1))
+    if not unseen.any():
+        return 0
+    r = max(1, int(round(near_m / px)))
+    near = cv2.dilate(ev, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))) > 0
+    room_un = unseen[rid]
+    adj = cv2.dilate(room_un.astype(np.uint8), cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (4 * r + 1, 4 * r + 1))) > 0
+    sem = lab["sem"]
+    struct = np.isin(lab["sem_raw"], (WALL, DOOR, WINDOW, OPENING))
+    ign = ~near & ((room_un & (rid > 0)) | (struct & adj)) & (sem != IGNORE)
+    sem[ign] = IGNORE
+    return int(ign.sum())
 
 
 def _box_quad(b) -> np.ndarray:
@@ -477,11 +555,27 @@ def vector_doc(gt: SceneGT) -> dict:
     import cv2
 
     lay = gt.layout
+    arcs = {int(a["wall_id"]): a for a in gt.warp.arcs}
+
+    def along(w, s0: float, s1: float) -> float:
+        """Длина образа участка оси стены (по дуге - по дуге)."""
+        q = gt.poly([w.point(s0), w.point(s1)], closed=False)
+        return float(np.linalg.norm(np.diff(q, axis=0), axis=1).sum())
+
     walls = []
     for w in lay.walls:
         p0, p1 = gt.xy([w.p0])[0], gt.xy([w.p1])[0]
-        walls.append({"id": f"W{w.id}", "geometry": {"type": "segment", "p0": p0.round(4).tolist(),
-                                                     "p1": p1.round(4).tolist()},
+        geom = {"type": "segment", "p0": p0.round(4).tolist(), "p1": p1.round(4).tolist()}
+        if w.id in arcs:                                  # дуговой пролёт: ломаная + окружность
+            a = arcs[w.id]
+            pts = gt.poly([w.p0, w.p1], closed=False)
+            mid = gt.xy([w.point(sum(a["s"]) / 2)])[0]
+            ends = gt.xy([w.point(a["s"][0]), w.point(a["s"][1])])
+            geom = {"type": "polyline", "points": pts.round(4).tolist(),
+                    "arc": {"a": ends[0].round(4).tolist(), "b": ends[1].round(4).tolist(),
+                            "mid": mid.round(4).tolist(),
+                            "radius": round(float(a["R"] * math.sqrt(abs(np.linalg.det(gt.A)))), 4)}}
+        walls.append({"id": f"W{w.id}", "geometry": geom,
                       "thickness": round(float(w.thickness * math.sqrt(abs(np.linalg.det(gt.A)))), 4),
                       "is_exterior": w.kind == "exterior", "kind": w.kind})
     openings = []
@@ -489,12 +583,9 @@ def vector_doc(gt: SceneGT) -> dict:
         w = lay.wall(o.wall_id)
         top_wall = w.height if w.height is not None else gt.ceiling_h
         typ = "window" if o.kind == "window" else ("opening" if o.z1 >= top_wall - 0.05 else "door")
-        a = gt.xy([w.point(o.s - o.width / 2)])[0]
-        b = gt.xy([w.point(o.s + o.width / 2)])[0]
-        p0 = gt.xy([w.p0])[0]
         openings.append({"id": f"O{o.id}", "type": typ, "host_wall_id": f"W{w.id}",
-                         "offset": round(float(np.linalg.norm(a - p0)), 4),
-                         "width": round(float(np.linalg.norm(b - a)), 4),
+                         "offset": round(along(w, 0.0, o.s - o.width / 2), 4),
+                         "width": round(along(w, o.s - o.width / 2, o.s + o.width / 2), 4),
                          "sill_z": round(float(o.z0 if typ == "window" else 0.0), 4),
                          "top_z": round(float(min(o.z1, top_wall)), 4)})
     rooms = []
@@ -513,9 +604,11 @@ def vector_doc(gt: SceneGT) -> dict:
         cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cnt = max(cnts, key=cv2.contourArea)[:, 0, :].astype(float)
         poly = np.c_[x0 + (cnt[:, 0] - 1) * step, y0 + (cnt[:, 1] - 1) * step]
+        q = gt.poly(poly)
+        area = r.area * abs(np.linalg.det(gt.A)) if gt.warp.linear else \
+            0.5 * abs(float(q[:, 0] @ np.roll(q[:, 1], -1) - q[:, 1] @ np.roll(q[:, 0], -1)))
         rooms.append({"id": f"R{r.id}", "kind": r.kind, "name": r.name,
-                      "polygon": gt.xy(poly).round(4).tolist(),
-                      "area": round(float(r.area * abs(np.linalg.det(gt.A))), 3)})
+                      "polygon": q.round(4).tolist(), "area": round(float(area), 3)})
     return {"walls": walls, "openings": openings, "rooms": rooms}
 
 
@@ -597,6 +690,7 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
         d = root / "scenes" / scene_id / f"L{gt.level + 1}"
         d.mkdir(parents=True, exist_ok=True)
         lab = label_level(gt, r["frame"])
+        n_ign = ignore_unseen(lab, r["input"], px)
         np.save(d / "input.npy", r["input"])
         import cv2
 
@@ -611,7 +705,8 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
               "floor_z": r["level"]["floor_z"], "ceiling_z": r["level"]["ceiling_z"],
               "floor_z_gt": gt.floor_z, "ceiling_z_gt": gt.floor_z + gt.ceiling_h,
               "frame": r["frame"], "pixel_to_world": affine(r["frame"]), "rasterizer": RASTERIZER_VERSION,
-              "bare": meta.get("bare"), "aug": {"thin": thin, "z_shift": z_shift, "rot_deg": rot_deg}}
+              "bare": meta.get("bare"), "aug": {"thin": thin, "z_shift": z_shift, "rot_deg": rot_deg},
+              "labels": LABELS_VERSION, "ignored_unseen_px": n_ign}
         (d / "scene.json").write_text(json.dumps(sc, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
         _preview(r["input"].astype(np.float32), lab["sem_raw"], d / "preview.png")
         out_dirs.append(str(d))

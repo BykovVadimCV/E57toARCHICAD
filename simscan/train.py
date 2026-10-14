@@ -25,7 +25,7 @@ def _loaders(data, crop, batch, workers, seed, weighted_sampling: bool = False):
 
     from .torchdata import torch_dataset, make_weighted_sampler
 
-    tr = torch_dataset(data, "train", crop=crop, train=True, seed=seed)
+    tr = torch_dataset(data, "train", crop=crop, train=True, seed=seed, weighted_sampling=weighted_sampling)
     va = torch_dataset(data, "val", crop=None, train=False)          # val - уровни целиком
 
     def init(wid):                     # у каждого процесса загрузчика своя случайность аугментаций
@@ -97,7 +97,8 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
         log(f"gradient accumulation: {accum_steps} шагов (эффективный batch={batch * accum_steps})")
     model = PlanNet().to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    steps = epochs * max(len(tl), 1)
+    # шаг планировщика - на шаг оптимизатора, то есть раз в accum_steps батчей
+    steps = epochs * max(len(tl) // max(accum_steps, 1), 1)
     steps = max(steps, 10)                        # разогрев - хотя бы 2 шага (иначе деление на ноль)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=steps,
                                                 pct_start=min(0.3, max(0.05, 2.5 / steps)))

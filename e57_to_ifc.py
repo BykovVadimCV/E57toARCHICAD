@@ -135,75 +135,127 @@ def get_e57_file() -> Path:
         return path
 
 
-def run_inference(model_path: Path, e57_path: Path, output_dir: Path) -> bool:
-    """Запустить вывод модели."""
+BUILDERS = {"1": "vectorize", "2": "cellplan", "3": "both"}
+TTAS = {"1": "none", "2": "flip", "3": "d4"}
+
+
+def ask_options() -> dict:
+    """Построитель плана и TTA."""
+    print(f"\n{Colors.BOLD}Построитель плана:{Colors.ENDC}")
+    print("  1. vectorize - по выходу сети: прямые стены, ось по центру, дуги, без мелкого мусора (~0,2 с на уровень)")
+    print("  2. cellplan  - облако + вероятности сети (медленнее, читает E57 ещё раз)")
+    print("  3. оба       - два IFC рядом, для сравнения")
+    builder = BUILDERS.get(get_input("Выбор (1-3)", "3"), "both")
+    print(f"\n{Colors.BOLD}Test-Time Augmentation (точнее, но дольше шаг сети):{Colors.ENDC}")
+    print("  1. none - без TTA")
+    print("  2. flip - 4 отражения (x4 по времени)")
+    print("  3. d4   - отражения и повороты на 90° (x8 по времени)")
+    tta = TTAS.get(get_input("Выбор (1-3)", "2"), "flip")
+    return {"builder": builder, "tta": tta}
+
+
+def run_inference(model_path: Path, e57_path: Path, output_dir: Path, opts: dict) -> list[Path]:
+    """Вывод модели; при builder vectorize/both - сразу векторный план на каждый уровень.
+    Возвращает каталоги уровней ([] - ошибка)."""
     from simscan.infer import infer
-    
+
     print_header("ШАГ 1/3: Вывод модели (Inference)")
     print_info(f"Модель: {model_path}")
     print_info(f"E57 файл: {e57_path}")
     print_info(f"Выходная директория: {output_dir}")
-    
+    print_info(f"TTA: {opts['tta']}; векторный план: {'да' if opts['builder'] != 'cellplan' else 'нет'}")
+
     try:
         results = infer(
             str(model_path),
             [str(e57_path)],
             str(output_dir),
             tile=512,
+            tta=False if opts["tta"] == "none" else opts["tta"],
+            plan=opts["builder"] in ("vectorize", "both"),
             log=lambda x: print(f"  {Colors.OKBLUE}→{Colors.ENDC} {x}")
         )
-        
+
         if results:
             print_success(f"Inference завершен. Создано {len(results)} уровней:")
             for r in results:
                 print(f"  • {r}")
-            return True
-        else:
-            print_error("Не удалось выполнить inference")
-            return False
-    
+            return [Path(r) for r in results]
+        print_error("Не удалось выполнить inference")
+        return []
+
     except Exception as e:
         print_error(f"Ошибка при inference: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        return []
 
 
-def run_vectorization(pred_dir: Path, vector_dir: Path) -> bool:
-    """Запустить векторизацию."""
-    from simscan.vectorize import main_vectorize
-    
-    print_header("ШАГ 2/3: Векторизация")
+def vector_plans(levels: list[Path]) -> list[Path]:
+    """plan.json векторизатора по уровням (их пишет infer с plan=True)."""
+    plans = [d / "plan.json" for d in levels if (d / "plan.json").exists()]
+    if plans:
+        print_success(f"Векторный план готов: {len(plans)} уровней")
+        for d in levels:
+            if (d / "plan.png").exists():
+                print(f"  • {d / 'plan.png'}")
+    else:
+        print_error("Векторный план не построен")
+    return plans
+
+
+def build_and_export(e57_path: Path, levels: list[Path], pred_dir: Path, out_dir: Path, opts: dict) -> list[Path]:
+    """Шаги 2-3: план выбранным построителем -> IFC. Возвращает записанные IFC."""
+    stem = e57_path.stem
+    both = opts["builder"] == "both"
+    done = []
+    if opts["builder"] in ("vectorize", "both"):
+        print_header("ШАГ 2/3: План (vectorize - по выходу сети)")
+        plans = vector_plans(levels)
+        ifc = out_dir / (f"{stem}_vectorize.ifc" if both else f"{stem}.ifc")
+        if plans and run_ifc_export(plans, ifc):
+            done.append(ifc)
+    if opts["builder"] in ("cellplan", "both"):
+        plans = run_cellplan(e57_path, pred_dir, out_dir / "plan")
+        ifc = out_dir / (f"{stem}_cellplan.ifc" if both else f"{stem}.ifc")
+        if plans and run_ifc_export(plans, ifc):
+            done.append(ifc)
+    return done
+
+
+def run_cellplan(e57_path: Path, pred_dir: Path, plan_dir: Path) -> list[Path]:
+    """План: разбиение на ячейки и разметка по облаку и вероятностям сети."""
+    from simscan.cellplan import cellplan
+
+    print_header("ШАГ 2/3: План (cellplan - облако + вероятности сети)")
     print_info(f"Предсказания: {pred_dir}")
-    print_info(f"Выходная директория: {vector_dir}")
-    
+    print_info(f"Выходная директория: {plan_dir}")
+
     try:
-        main_vectorize(
-            str(pred_dir), 
-            str(vector_dir),
-            log=lambda x: print(f"  {Colors.OKBLUE}→{Colors.ENDC} {x}")
-        )
-        print_success(f"Векторизация завершена: {vector_dir}")
-        return True
-    
+        cellplan(e57_path, plan_dir, pred=pred_dir,
+                 log=lambda x: print(f"  {Colors.OKBLUE}→{Colors.ENDC} {x}"))
+        plans = sorted(plan_dir.glob("plan_L*.json"))
+        print_success(f"План готов: {len(plans)} уровней")
+        return plans
+
     except Exception as e:
-        print_error(f"Ошибка при векторизации: {e}")
+        print_error(f"Ошибка при построении плана: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        return []
 
 
-def run_ifc_export(plan_json: Path, ifc_path: Path) -> bool:
+def run_ifc_export(plan_json, ifc_path: Path) -> bool:
     """Запустить экспорт в IFC."""
     from simscan.export_ifc import main_export_ifc
     
     print_header("ШАГ 3/3: Экспорт в IFC")
-    print_info(f"План: {plan_json}")
+    print_info(f"План: {', '.join(map(str, plan_json)) if isinstance(plan_json, list) else plan_json}")
     print_info(f"Выходной IFC: {ifc_path}")
     
     try:
         main_export_ifc(
-            str(plan_json), 
+            plan_json,
             str(ifc_path),
             log=lambda x: print(f"  {Colors.OKBLUE}→{Colors.ENDC} {x}")
         )
@@ -221,7 +273,7 @@ def full_pipeline():
     """Полный пайплайн E57 → IFC."""
     clear_screen()
     print_header("E57 → IFC КОНВЕРТЕР")
-    print_info("Полный пайплайн: Inference → Векторизация → IFC\n")
+    print_info("Полный пайплайн: Inference → план (vectorize / cellplan) → IFC\n")
     
     # 1. Проверка модели
     model_path = ensure_model_exists()
@@ -239,59 +291,38 @@ def full_pipeline():
     )
     output_dir = Path(output_str)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+    opts = ask_options()
+
     pred_dir = output_dir / "predictions"
-    vector_dir = output_dir / "vector"
-    ifc_path = output_dir / f"{base_name}.ifc"
-    
     print(f"\n{Colors.BOLD}Будут созданы:{Colors.ENDC}")
     print(f"  Предсказания: {pred_dir}")
-    print(f"  Векторный план: {vector_dir}")
-    print(f"  IFC файл: {ifc_path}\n")
+    if opts["builder"] in ("vectorize", "both"):
+        print(f"  Векторный план: {pred_dir / base_name}/L*/plan.json, plan.png, plan.svg")
+    if opts["builder"] in ("cellplan", "both"):
+        print(f"  План (cellplan): {output_dir / 'plan'}")
+    print(f"  IFC: {output_dir}/{base_name}*.ifc\n")
     
     proceed = get_input("Начать обработку? (y/n)", "y").lower()
     if proceed != 'y':
         print_warning("Отменено пользователем")
         return
     
-    # Шаг 1: Inference
-    if not run_inference(model_path, e57_path, pred_dir):
+    # Шаг 1: Inference (+ векторный план)
+    levels = run_inference(model_path, e57_path, pred_dir, opts)
+    if not levels:
         print_error("Не удалось выполнить inference. Прерывание.")
         return
-    
-    # Найти уровни для векторизации
-    levels = list(pred_dir.glob(f"{base_name}/L*"))
-    if not levels:
-        print_error("Не найдено уровней после inference")
+
+    # Шаги 2-3: план -> один IFC, этаж на уровень
+    ifcs = build_and_export(e57_path, levels, pred_dir / base_name, output_dir, opts)
+    if not ifcs:
+        print_error("IFC не записан.")
         return
-    
-    # Для каждого уровня делаем векторизацию и экспорт
-    for level_dir in sorted(levels):
-        level_name = level_dir.name
-        level_vector_dir = vector_dir / level_name
-        level_ifc = output_dir / f"{base_name}_{level_name}.ifc"
-        
-        print(f"\n{Colors.BOLD}Обработка {level_name}{Colors.ENDC}")
-        
-        # Шаг 2: Векторизация
-        if not run_vectorization(level_dir, level_vector_dir):
-            print_warning(f"Пропуск {level_name} из-за ошибки векторизации")
-            continue
-        
-        # Шаг 3: IFC экспорт
-        plan_json = level_vector_dir / "plan.json"
-        if not plan_json.exists():
-            print_error(f"Не найден plan.json в {level_vector_dir}")
-            continue
-        
-        if not run_ifc_export(plan_json, level_ifc):
-            print_warning(f"Пропуск {level_name} из-за ошибки экспорта IFC")
-            continue
-    
+
     print_header("ГОТОВО!")
     print_success(f"Результаты сохранены в: {output_dir}")
     print(f"\n{Colors.BOLD}IFC файлы:{Colors.ENDC}")
-    for ifc_file in output_dir.glob("*.ifc"):
+    for ifc_file in ifcs:
         print(f"  • {ifc_file}")
 
 
@@ -358,6 +389,7 @@ def batch_convert():
     
     output_dir = Path(get_input("Выходная директория", str(input_dir / "output")))
     output_dir.mkdir(parents=True, exist_ok=True)
+    opts = ask_options()
     
     # Обработать каждый файл
     for idx, e57_path in enumerate(e57_files, 1):
@@ -367,24 +399,14 @@ def batch_convert():
         file_output.mkdir(parents=True, exist_ok=True)
         
         pred_dir = file_output / "predictions"
-        vector_dir = file_output / "vector"
         
-        # Inference
-        if not run_inference(model_path, e57_path, pred_dir):
+        # Inference (+ векторный план)
+        levels = run_inference(model_path, e57_path, pred_dir, opts)
+        if not levels:
             print_warning(f"Пропуск {e57_path.name}")
             continue
-        
-        # Векторизация и экспорт для каждого уровня
-        levels = list(pred_dir.glob(f"{e57_path.stem}/L*"))
-        for level_dir in sorted(levels):
-            level_name = level_dir.name
-            level_vector_dir = vector_dir / level_name
-            level_ifc = file_output / f"{e57_path.stem}_{level_name}.ifc"
-            
-            if run_vectorization(level_dir, level_vector_dir):
-                plan_json = level_vector_dir / "plan.json"
-                if plan_json.exists():
-                    run_ifc_export(plan_json, level_ifc)
+
+        build_and_export(e57_path, levels, pred_dir / e57_path.stem, file_output, opts)
     
     print_header("ПАКЕТНАЯ ОБРАБОТКА ЗАВЕРШЕНА")
     print_success(f"Результаты в: {output_dir}")
@@ -488,15 +510,17 @@ def show_about():
 {Colors.BOLD}Возможности:{Colors.ENDC}
   • Автоматическое извлечение планов из облаков точек
   • Распознавание стен, дверей, окон, помещений
-  • Векторизация результатов
+  • План: vectorize (по выходу сети: прямые стены, ось по центру, дуги, чистка мусора)
+    или cellplan (облако + вероятности сети), или оба для сравнения
+  • Test-Time Augmentation: flip (4 отражения) или d4 (8 вариантов)
   • Экспорт в формат IFC для ArchiCAD и других BIM систем
   • Пакетная обработка нескольких файлов
   • Детальная инспекция E57 файлов
 
 {Colors.BOLD}Пайплайн обработки:{Colors.ENDC}
   1. Inference: нейросеть извлекает план из облака точек
-  2. Векторизация: растровые предсказания → векторы
-  3. IFC Export: векторный план → модель IFC
+  2. План: vectorize и/или cellplan → стены (оси, толщины, дуги), проёмы, помещения
+  3. IFC Export: все уровни → один IFC, этаж на уровень
 
 {Colors.BOLD}Требования:{Colors.ENDC}
   • Python 3.10-3.14

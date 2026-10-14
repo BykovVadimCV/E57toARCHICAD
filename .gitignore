@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+runs/
+*.pt
+test_archicad_export/
+
+# реальные объекты заказчика и результаты по ним - не в репозиторий
+TEST1/
+*_output/
+*.e57
+*_report.zip

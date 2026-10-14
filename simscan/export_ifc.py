@@ -1,453 +1,382 @@
-"""Экспорт векторного плана в IFC для ArchiCAD.
+"""Экспорт векторного плана в IFC 4 для ArchiCAD (на ifcopenshell).
 
-    python -m simscan export-ifc vectors/plan.json --out plan.ifc
+    python -m simscan export-ifc vectors/L1/plan.json --out plan.ifc
+    python -m simscan export-ifc vectors/L1/plan.json vectors/L2/plan.json --out plan.ifc   # этажи
 
-Создаёт IFC 4 файл с:
-  - IfcBuilding, IfcBuildingStorey (этажи)
-  - IfcWall для каждой стены (IfcMaterialLayerSetUsage для толщины)
-  - IfcDoor, IfcWindow для проёмов
-  - IfcSpace для помещений с площадями
-  - 2D геометрия (IfcArbitraryClosedProfileDef, IfcPolyline)
-  - Координатная система проекта
+Что пишется:
+  - IfcProject / IfcSite / IfcBuilding / IfcBuildingStorey на отметке floor_z уровня;
+  - IfcWall на каждый прямой участок оси стены: размещение в начале участка, ось X - вдоль
+    участка; представления Axis (ось) и Body (SweptSolid, симметрично оси), материал -
+    IfcMaterialLayerSetUsage со смещением -t/2 (ось по середине слоя);
+  - проём - IfcOpeningElement, вырезающий стену (IfcRelVoidsElement), и IfcDoor / IfcWindow,
+    заполняющие проём (IfcRelFillsElement). Низ и верх проёма - из plan.json (sill, head - от
+    пола уровня), по умолчанию дверь 0-2,1 м, окно 0,9-2,1 м, проём во всю высоту - до потолка;
+  - IfcSpace с контуром помещения и Qto_SpaceBaseQuantities (NetFloorArea, GrossPerimeter, Height).
 
-ArchiCAD читает IFC4 начиная с версии 21. Файл совместим с:
-  - ArchiCAD 21+
-  - Revit 2020+ (с IFC импортом)
-  - BricsCAD BIM
-  - Открытыми просмотрщиками (BIMVision, Solibri Anywhere)
+Высота стен и помещений - ceiling_z - floor_z уровня. Координаты plan.json (м) пишутся как есть.
 """
 from __future__ import annotations
 
 import json
-import time
-import uuid
+import math
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
-
-# ----------------------------------------------------------------------
-# IFC генератор (без ifcopenshell - чистый текстовый формат)
-# ----------------------------------------------------------------------
-
-class IFCWriter:
-    """Минималистичный генератор IFC 4 ADD2 TC1."""
-
-    def __init__(self):
-        self.entities: list[str] = []
-        self.next_id = 1
-        self.refs: dict[str, int] = {}
-
-    def new_id(self, label: str | None = None) -> int:
-        """Выделить новый #ID."""
-        eid = self.next_id
-        self.next_id += 1
-        if label:
-            self.refs[label] = eid
-        return eid
-
-    def ref(self, label: str) -> str:
-        """Ссылка на ранее созданную сущность."""
-        return f"#{self.refs[label]}"
-
-    def add(self, entity_type: str, *args, label: str | None = None) -> int:
-        """Добавить сущность IFC."""
-        eid = self.new_id(label)
-        formatted_args = []
-        for arg in args:
-            formatted_args.append(self._format_value(arg))
-        line = f"#{eid}={entity_type}({','.join(formatted_args)});"
-        self.entities.append(line)
-        return eid
-
-    def _format_value(self, val: Any) -> str:
-        """Форматирование значения для IFC."""
-        if val is None or val == "$":
-            return "$"
-        elif isinstance(val, str):
-            if val.startswith("#"):
-                return val  # ссылка
-            return f"'{val}'"
-        elif isinstance(val, bool):
-            return ".T." if val else ".F."
-        elif isinstance(val, (int, float)):
-            if isinstance(val, float):
-                return f"{val:.6f}".rstrip('0').rstrip('.')
-            return str(val)
-        elif isinstance(val, (list, tuple)):
-            if len(val) == 0:
-                return "()"
-            return f"({','.join(self._format_value(v) for v in val)})"
-        elif hasattr(val, "__iter__") and not isinstance(val, str):
-            return f"({','.join(self._format_value(v) for v in val)})"
-        else:
-            return str(val)
-
-    def write(self, path: Path, description: str = "Floor plan from E57 scan") -> None:
-        """Записать IFC файл."""
-        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-
-        header = f"""ISO-10303-21;
-HEADER;
-FILE_DESCRIPTION(('{description}'),'2;1');
-FILE_NAME('{path.name}','{timestamp}',('simscan'),('DotCloudCONVERT'),'','','');
-FILE_SCHEMA(('IFC4'));
-ENDSEC;
-
-DATA;
-"""
-
-        footer = """ENDSEC;
-END-ISO-10303-21;
-"""
-
-        content = header + "\n".join(self.entities) + "\n" + footer
-        path.write_text(content, encoding="utf-8")
+DEFAULT_STOREY_H = 2.7
+DOOR_HEAD = 2.1
+WINDOW_SILL, WINDOW_HEAD = 0.9, 2.1
+MIN_SEGMENT = 0.01          # участки оси короче - вырожденные
+MIN_OPENING = 0.2           # проёмы уже - не вырезаются
+OPENING_EPS = 0.02          # проём толще стены на столько с каждой стороны - чистый вырез
+FILL_THICKNESS = 0.05       # толщина полотна двери / рамы окна
 
 
-# ----------------------------------------------------------------------
-# IFC построители
-# ----------------------------------------------------------------------
+def _new_file(project_name: str):
+    import ifcopenshell.api as api
 
-def create_ifc_header(ifc: IFCWriter, project_name: str = "Apartment") -> None:
-    """Создать заголовок IFC: проект, контекст, единицы."""
-
-    # Единицы измерения
-    ifc.add("IFCSIUNIT", "*", ".LENGTHUNIT.", "$", ".METRE.", label="unit_m")
-    ifc.add("IFCSIUNIT", "*", ".AREAUNIT.", "$", ".SQUARE_METRE.", label="unit_m2")
-    ifc.add("IFCSIUNIT", "*", ".VOLUMEUNIT.", "$", ".CUBIC_METRE.", label="unit_m3")
-    ifc.add("IFCSIUNIT", "*", ".PLANEANGLEUNIT.", "$", ".RADIAN.", label="unit_rad")
-
-    units_id = ifc.add("IFCUNITASSIGNMENT", [ifc.ref("unit_m"), ifc.ref("unit_m2"),
-                                              ifc.ref("unit_m3"), ifc.ref("unit_rad")],
-                       label="units")
-
-    # Контекст геометрии
-    ifc.add("IFCAXIS2PLACEMENT3D", ifc.ref("origin"), "$", "$", label="world_placement")
-
-    ifc.add("IFCGEOMETRICREPRESENTATIONCONTEXT", "$", "Model", 3, 1.0e-5,
-            ifc.ref("world_placement"), "$", label="geom_context")
-
-    ifc.add("IFCGEOMETRICREPRESENTATIONSUBCONTEXT", "Axis", "Model", "*", "*", "*",
-            ifc.ref("geom_context"), "$", ".GRAPH_VIEW.", "$", label="axis_context")
-
-    ifc.add("IFCGEOMETRICREPRESENTATIONSUBCONTEXT", "Body", "Model", "*", "*", "*",
-            ifc.ref("geom_context"), "$", ".MODEL_VIEW.", "$", label="body_context")
-
-    # Проект
-    ifc.add("IFCPROJECT", _guid(), ifc.ref("owner_history"), project_name,
-            project_name + " floor plan", "$", "$", "$",
-            [ifc.ref("geom_context")], ifc.ref("units"), label="project")
-
-    # Локальное размещение для здания
-    ifc.add("IFCLOCALPLACEMENT", "$", ifc.ref("world_placement"), label="building_placement")
-
-    # Здание
-    ifc.add("IFCBUILDING", _guid(), ifc.ref("owner_history"), "Building",
-            "Residential building", "$", ifc.ref("building_placement"), "$",
-            ".ELEMENT.", "$", "$", "$", label="building")
-
-    ifc.add("IFCRELAGGREGATES", _guid(), ifc.ref("owner_history"), "BuildingContainer",
-            "$", ifc.ref("project"), [ifc.ref("building")])
+    f = api.run("project.create_file", version="IFC4")
+    project = api.run("root.create_entity", f, ifc_class="IfcProject", name=project_name)
+    si = lambda raw: {"is_metric": True, "raw": raw}  # noqa: E731  (по умолчанию было бы мм)
+    api.run("unit.assign_unit", f, length=si("METERS"), area=si("SQUARE_METERS"), volume=si("CUBIC_METERS"))
+    model = api.run("context.add_context", f, context_type="Model")
+    ctx = {
+        "body": api.run("context.add_context", f, context_type="Model", context_identifier="Body",
+                        target_view="MODEL_VIEW", parent=model),
+        "axis": api.run("context.add_context", f, context_type="Model", context_identifier="Axis",
+                        target_view="GRAPH_VIEW", parent=model),
+    }
+    site = api.run("root.create_entity", f, ifc_class="IfcSite", name="Site")
+    building = api.run("root.create_entity", f, ifc_class="IfcBuilding", name="Building")
+    api.run("aggregate.assign_object", f, products=[site], relating_object=project)
+    api.run("aggregate.assign_object", f, products=[building], relating_object=site)
+    for el in (site, building):
+        el.ObjectPlacement = _placement(f, None)
+    return f, ctx, building
 
 
-def create_origin(ifc: IFCWriter) -> None:
-    """Создать начало координат."""
-    ifc.add("IFCCARTESIANPOINT", [0.0, 0.0, 0.0], label="origin")
-    ifc.add("IFCDIRECTION", [0.0, 0.0, 1.0], label="axis_z")
-    ifc.add("IFCDIRECTION", [1.0, 0.0, 0.0], label="axis_x")
-    ifc.add("IFCDIRECTION", [0.0, 1.0, 0.0], label="axis_y")
+def _placement(f, rel_to, origin=(0.0, 0.0, 0.0), x_dir=(1.0, 0.0)):
+    """IfcLocalPlacement относительно rel_to: начало origin, ось X в плане - x_dir."""
+    ax = f.createIfcAxis2Placement3D(
+        f.createIfcCartesianPoint([float(v) for v in origin]),
+        f.createIfcDirection([0.0, 0.0, 1.0]),
+        f.createIfcDirection([float(x_dir[0]), float(x_dir[1]), 0.0]))
+    return f.createIfcLocalPlacement(rel_to, ax)
 
 
-def create_owner_history(ifc: IFCWriter) -> None:
-    """Создать OwnerHistory."""
-    ifc.add("IFCPERSON", "$", "DotCloudCONVERT", "$", "$", "$", "$", "$", label="person")
-    ifc.add("IFCORGANIZATION", "$", "simscan", "$", "$", "$", label="organization")
-    ifc.add("IFCPERSONANDORGANIZATION", ifc.ref("person"), ifc.ref("organization"), "$",
-            label="person_org")
-    ifc.add("IFCAPPLICATION", ifc.ref("organization"), "0.1.0", "simscan", "DotCloudCONVERT",
-            label="application")
-    ifc.add("IFCOWNERHISTORY", ifc.ref("person_org"), ifc.ref("application"), "$",
-            ".ADDED.", "$", ifc.ref("person_org"), ifc.ref("application"), int(time.time()),
-            label="owner_history")
+def _box(f, ctx, x0, y0, z0, dx, dy, dz):
+    """Тело-параллелепипед [x0, x0+dx] x [y0, y0+dy] x [z0, z0+dz] в СК объекта."""
+    prof = f.createIfcRectangleProfileDef(
+        "AREA", None,
+        f.createIfcAxis2Placement2D(f.createIfcCartesianPoint([x0 + dx / 2, y0 + dy / 2]), None),
+        float(dx), float(dy))
+    solid = f.createIfcExtrudedAreaSolid(
+        prof, f.createIfcAxis2Placement3D(f.createIfcCartesianPoint([0.0, 0.0, float(z0)]), None, None),
+        f.createIfcDirection([0.0, 0.0, 1.0]), float(dz))
+    return f.createIfcShapeRepresentation(ctx, "Body", "SweptSolid", [solid])
 
 
-def create_local_placement(ifc: IFCWriter, parent_ref: str | None = None,
-                           z_offset: float = 0.0, label: str = "local_placement") -> None:
-    """Создать локальную систему координат."""
-    if z_offset != 0.0:
-        ifc.add("IFCCARTESIANPOINT", [0.0, 0.0, z_offset], label=f"{label}_origin")
-        ifc.add("IFCAXIS2PLACEMENT3D", ifc.ref(f"{label}_origin"), "$", "$",
-                label=f"{label}_axis")
+def _layer_set(f, cache: dict, thickness: float):
+    import ifcopenshell.api as api
+
+    key = round(thickness, 3)
+    if key not in cache:
+        if "material" not in cache:
+            cache["material"] = api.run("material.add_material", f, name="Wall")
+        ls = api.run("material.add_material_set", f, name=f"Wall {key * 1000:.0f} mm",
+                     set_type="IfcMaterialLayerSet")
+        layer = api.run("material.add_layer", f, layer_set=ls, material=cache["material"])
+        layer.LayerThickness = key
+        cache[key] = ls
+    return cache[key]
+
+
+def _segments(points) -> list[tuple[np.ndarray, np.ndarray]]:
+    pts = [np.asarray(p, float) for p in points]
+    return [(a, b) for a, b in zip(pts, pts[1:]) if np.linalg.norm(b - a) >= MIN_SEGMENT]
+
+
+def _curved(wall: dict) -> bool:
+    """Дуга (или ломаная, заметно отходящая от хорды) - одна стена с изогнутым телом."""
+    pts = np.asarray(wall.get("points", []), float)
+    if wall.get("arc"):
+        return len(pts) > 2
+    if len(pts) <= 2:
+        return False
+    a, b = pts[0], pts[-1]
+    d = b - a
+    L = float(np.linalg.norm(d))
+    if L < 1e-9:
+        return False
+    n = np.array([-d[1], d[0]]) / L
+    if float(np.abs((pts - a) @ n).max()) <= 0.02:
+        return False
+    seg = np.diff(pts, axis=0)
+    seg = seg[np.linalg.norm(seg, axis=1) > 1e-9]
+    seg /= np.linalg.norm(seg, axis=1, keepdims=True)
+    turn = np.degrees(np.arccos(np.clip((seg[:-1] * seg[1:]).sum(1), -1, 1)))
+    return bool(len(turn)) and float(turn.max()) <= 20.0       # плавно (дуга), а не угол - угол режется на прямые
+
+
+def _offset(pts: np.ndarray, d: float) -> np.ndarray:
+    """Ломаная, сдвинутая на d по левой нормали (нормали в вершинах - средние)."""
+    seg = np.diff(pts, axis=0)
+    n = np.c_[-seg[:, 1], seg[:, 0]] / np.maximum(np.linalg.norm(seg, axis=1, keepdims=True), 1e-12)
+    nv = np.vstack([n[:1], (n[:-1] + n[1:]) / 2, n[-1:]])
+    nv /= np.maximum(np.linalg.norm(nv, axis=1, keepdims=True), 1e-12)
+    return pts + nv * d
+
+
+def _add_curved_wall(f, ctx, storey, mats, wall: dict, height: float, name: str) -> dict:
+    """Дуговая стена одним IfcWall: ось - ломаная, тело - полоса ±t/2 вдоль неё, выдавленная
+    на высоту."""
+    import ifcopenshell.api as api
+    import ifcopenshell.util.element
+
+    t = float(wall["thickness"])
+    pts = np.asarray(wall["points"], float)
+    w = api.run("root.create_entity", f, ifc_class="IfcWall", predefined_type="STANDARD", name=name)
+    w.ObjectPlacement = _placement(f, storey.ObjectPlacement)
+    axis = f.createIfcShapeRepresentation(
+        ctx["axis"], "Axis", "Curve2D", [f.createIfcPolyline([f.createIfcCartesianPoint(list(map(float, p)))
+                                                              for p in pts])])
+    band = np.vstack([_offset(pts, t / 2), _offset(pts, -t / 2)[::-1]])
+    prof = f.createIfcArbitraryClosedProfileDef(
+        "AREA", None, f.createIfcPolyline([f.createIfcCartesianPoint(list(map(float, p))) for p in band]
+                                          + [f.createIfcCartesianPoint(list(map(float, band[0])))]))
+    solid = f.createIfcExtrudedAreaSolid(
+        prof, f.createIfcAxis2Placement3D(f.createIfcCartesianPoint([0.0, 0.0, 0.0]), None, None),
+        f.createIfcDirection([0.0, 0.0, 1.0]), float(height))
+    body = f.createIfcShapeRepresentation(ctx["body"], "Body", "SweptSolid", [solid])
+    w.Representation = f.createIfcProductDefinitionShape(None, None, [axis, body])
+    api.run("material.assign_material", f, products=[w], type="IfcMaterialLayerSetUsage",
+            material=_layer_set(f, mats, t))
+    ifcopenshell.util.element.get_material(w).OffsetFromReferenceLine = -t / 2
+    api.run("spatial.assign_container", f, products=[w], relating_structure=storey)
+    pset = api.run("pset.add_pset", f, product=w, name="Pset_WallCommon")
+    api.run("pset.edit_pset", f, pset=pset, properties={"IsExternal": bool(wall.get("is_outer", False))})
+    return {"wall": w, "pts": pts, "t": t}
+
+
+def _chord_seg(f, storey, cw: dict, op: dict) -> dict:
+    """Участок под проём в дуговой стене: хорда между концами проёма (на оси), толщина - с
+    запасом на стрелу дуги на этой хорде, своё размещение (начало хорды, ось X вдоль неё)."""
+    pts = cw["pts"]
+    a, b = np.asarray(op["a"], float), np.asarray(op["b"], float)
+
+    def on_axis(p):
+        best, bq = np.inf, p
+        for s0, s1 in zip(pts[:-1], pts[1:]):
+            d = s1 - s0
+            t = float(np.clip((p - s0) @ d / max(d @ d, 1e-12), 0, 1))
+            q = s0 + t * d
+            if np.linalg.norm(q - p) < best:
+                best, bq = float(np.linalg.norm(q - p)), q
+        return bq
+
+    a, b = on_axis(a), on_axis(b)
+    L = float(np.linalg.norm(b - a))
+    u = (b - a) / max(L, 1e-9)
+    n = np.array([-u[1], u[0]])
+    inside = [(q - a) @ u for q in pts]
+    span = [q for q, s in zip(pts, inside) if 0 <= s <= L]
+    sag = max([abs((q - a) @ n) for q in span], default=0.0)
+    place = _placement(f, storey.ObjectPlacement, (a[0], a[1], 0.0), u)
+    return {"wall": cw["wall"], "a": a, "u": u, "L": L, "t": cw["t"] + 2 * sag, "place": place}
+
+
+def _add_wall(f, ctx, storey, mats, wall: dict, a: np.ndarray, b: np.ndarray, height: float, name: str):
+    import ifcopenshell.api as api
+    import ifcopenshell.util.element
+
+    t = float(wall["thickness"])
+    L = float(np.linalg.norm(b - a))
+    u = (b - a) / L
+    w = api.run("root.create_entity", f, ifc_class="IfcWall", predefined_type="STANDARD", name=name)
+    w.ObjectPlacement = _placement(f, storey.ObjectPlacement, (a[0], a[1], 0.0), u)
+    axis = f.createIfcShapeRepresentation(
+        ctx["axis"], "Axis", "Curve2D",
+        [f.createIfcPolyline([f.createIfcCartesianPoint([0.0, 0.0]), f.createIfcCartesianPoint([L, 0.0])])])
+    w.Representation = f.createIfcProductDefinitionShape(
+        None, None, [axis, _box(f, ctx["body"], 0, -t / 2, 0, L, t, height)])
+    api.run("material.assign_material", f, products=[w], type="IfcMaterialLayerSetUsage",
+            material=_layer_set(f, mats, t))
+    ifcopenshell.util.element.get_material(w).OffsetFromReferenceLine = -t / 2
+    api.run("spatial.assign_container", f, products=[w], relating_structure=storey)
+    pset = api.run("pset.add_pset", f, product=w, name="Pset_WallCommon")
+    api.run("pset.edit_pset", f, pset=pset, properties={"IsExternal": bool(wall.get("is_outer", False))})
+    return {"wall": w, "a": a, "u": u, "L": L, "t": t, "place": w.ObjectPlacement}
+
+
+def _host(segs: list[dict], by_id: dict, op: dict) -> dict | None:
+    """Участок стены под проёмом: тот, на который проём ложится наибольшей длиной (участки
+    wall_id - первыми). Ближе к середине - при равенстве и если не перекрывает ни один."""
+    a, b = np.asarray(op["a"], float), np.asarray(op["b"], float)
+    m = (a + b) / 2
+    w = max(float(op.get("width") or 0.0), float(np.linalg.norm(b - a)))
+
+    def score(s):
+        r = m - s["a"]
+        c = float(r @ s["u"])
+        d = float(np.linalg.norm(r - c * s["u"]))
+        overlap = max(0.0, min(s["L"], c + w / 2) - max(0.0, c - w / 2))
+        near = d <= s["t"] / 2 + 0.3
+        return (near and overlap >= MIN_OPENING, s in own, overlap if near else 0.0, -d)
+
+    own = by_id.get(op.get("wall_id")) or []
+    return max(segs, key=score) if segs else None
+
+
+def _opening_heights(op: dict, height: float) -> tuple[float, float]:
+    kind = op.get("opening_type", "opening")
+    sill, head = op.get("sill"), op.get("head")
+    if kind == "window":
+        sill = WINDOW_SILL if sill is None else sill
+        head = WINDOW_HEAD if head is None else head
     else:
-        ifc.add("IFCAXIS2PLACEMENT3D", ifc.ref("origin"), "$", "$",
-                label=f"{label}_axis")
-
-    parent = ifc.ref(parent_ref) if parent_ref else "$"
-    ifc.add("IFCLOCALPLACEMENT", parent, ifc.ref(f"{label}_axis"), label=label)
-
-
-def create_storey(ifc: IFCWriter, name: str, elevation: float, label: str) -> None:
-    """Создать этаж."""
-    create_local_placement(ifc, "local_placement", elevation, f"{label}_placement")
-
-    ifc.add("IFCBUILDINGSTOREY", _guid(), ifc.ref("owner_history"), name,
-            f"Floor level at {elevation:.2f}m", "$", ifc.ref(f"{label}_placement"),
-            "$", ".ELEMENT.", elevation, label=label)
-
-    ifc.add("IFCRELAGGREGATES", _guid(), ifc.ref("owner_history"),
-            f"{name}Container", "$", ifc.ref("building"), [ifc.ref(label)])
+        sill = 0.0
+        head = (DOOR_HEAD if kind == "door" else height) if head is None else head
+    sill = float(np.clip(sill, 0.0, height))
+    head = float(np.clip(head, 0.0, height))
+    if head - sill < 0.1:                                    # высоты сети вырождены - по умолчанию
+        sill, head = (WINDOW_SILL, min(WINDOW_HEAD, height)) if kind == "window" else (0.0, min(DOOR_HEAD, height))
+    return sill, head
 
 
-# ----------------------------------------------------------------------
-# Экспорт стен, проёмов, помещений
-# ----------------------------------------------------------------------
+def _add_opening(f, ctx, storey, seg: dict, op: dict, height: float, log) -> bool:
+    import ifcopenshell.api as api
 
-def export_wall(ifc: IFCWriter, wall: dict, storey_ref: str, idx: int) -> None:
-    """Экспорт стены в IFC."""
-    wall_label = f"wall_{idx}"
-    points = wall["points"]
-    thickness = wall["thickness"]
+    kind = op.get("opening_type", "opening")
+    a, b = np.asarray(op["a"], float), np.asarray(op["b"], float)
+    s = sorted(((a - seg["a"]) @ seg["u"], (b - seg["a"]) @ seg["u"]))
+    width = float(op.get("width") or 0.0)
+    if s[1] - s[0] < MIN_OPENING and width > 0:              # концы не по оси - ширина по центру
+        c = (s[0] + s[1]) / 2
+        s = [c - width / 2, c + width / 2]
+    s0, s1 = max(0.0, s[0]), min(seg["L"], s[1])
+    if s1 - s0 < MIN_OPENING:
+        log(f"  проём {op.get('id')} пропущен: ширина на стене {max(s1 - s0, 0):.2f} м")
+        return False
+    w = s1 - s0
+    sill, head = _opening_heights(op, height)
+    t = seg["t"] + 2 * OPENING_EPS
 
-    if len(points) < 2:
-        return
+    opening = api.run("root.create_entity", f, ifc_class="IfcOpeningElement", predefined_type="OPENING",
+                      name=f"{op.get('id', kind)} opening")
+    opening.ObjectPlacement = _placement(f, seg["place"], (s0, 0.0, 0.0))
+    opening.Representation = f.createIfcProductDefinitionShape(
+        None, None, [_box(f, ctx["body"], 0, -t / 2, sill, w, t, head - sill)])
+    api.run("feature.add_feature", f, feature=opening, element=seg["wall"])
 
-    # Геометрия: полилиния как ось стены
-    pt_refs = []
-    for i, (x, y) in enumerate(points):
-        pt_label = f"{wall_label}_pt{i}"
-        ifc.add("IFCCARTESIANPOINT", [x, y], label=pt_label)
-        pt_refs.append(ifc.ref(pt_label))
-
-    ifc.add("IFCPOLYLINE", pt_refs, label=f"{wall_label}_axis_geom")
-
-    # Представление оси
-    ifc.add("IFCSHAPEREPRESENTATION", ifc.ref("axis_context"), "Axis", "Curve2D",
-            [ifc.ref(f"{wall_label}_axis_geom")], label=f"{wall_label}_axis_rep")
-
-    # Материал стены
-    ifc.add("IFCMATERIAL", "Concrete", "$", "$", label=f"{wall_label}_material")
-    ifc.add("IFCMATERIALLAYER", ifc.ref(f"{wall_label}_material"), thickness, "$",
-            label=f"{wall_label}_mat_layer")
-    ifc.add("IFCMATERIALLAYERSET", [ifc.ref(f"{wall_label}_mat_layer")],
-            f"Wall {thickness*1000:.0f}mm", label=f"{wall_label}_mat_layerset")
-
-    # Профиль стены (прямоугольник толщины по оси)
-    ifc.add("IFCRECTANGLEPROFILEDEF", ".AREA.", f"Wall_{idx}", "$",
-            thickness, sum(np.linalg.norm(np.diff(np.array(points), axis=0), axis=1)),
-            label=f"{wall_label}_profile")
-
-    # Выдавливание вдоль оси
-    ifc.add("IFCDIRECTION", [0.0, 0.0, 1.0], label=f"{wall_label}_extrude_dir")
-    ifc.add("IFCEXTRUDEDAREASOLID", ifc.ref(f"{wall_label}_profile"), "$",
-            ifc.ref(f"{wall_label}_extrude_dir"), 3.0, label=f"{wall_label}_body_geom")
-
-    # Представление тела
-    ifc.add("IFCSHAPEREPRESENTATION", ifc.ref("body_context"), "Body", "SweptSolid",
-            [ifc.ref(f"{wall_label}_body_geom")], label=f"{wall_label}_body_rep")
-
-    # Определение продукта
-    ifc.add("IFCPRODUCTDEFINITIONSHAPE", "$", "$",
-            [ifc.ref(f"{wall_label}_axis_rep"), ifc.ref(f"{wall_label}_body_rep")],
-            label=f"{wall_label}_shape")
-
-    # Размещение стены
-    create_local_placement(ifc, f"{storey_ref}_placement", 0.0, f"{wall_label}_placement")
-
-    # Стена
-    is_external = wall.get("is_outer", False)
-    ifc.add("IFCWALL", _guid(), ifc.ref("owner_history"), wall.get("id", f"Wall {idx}"),
-            f"Length {wall.get('length', 0):.2f}m", "$", ifc.ref(f"{wall_label}_placement"),
-            ifc.ref(f"{wall_label}_shape"), "$", ".STANDARD.", label=wall_label)
-
-    # Связь с этажом
-    ifc.add("IFCRELCONTAINEDINSPATIALSTRUCTURE", _guid(), ifc.ref("owner_history"),
-            f"{wall_label}_containment", "$", [ifc.ref(wall_label)], ifc.ref(storey_ref))
-
-    # Связь с материалом
-    ifc.add("IFCRELASSOCIATESMATERIAL", _guid(), ifc.ref("owner_history"),
-            f"{wall_label}_material_rel", "$", [ifc.ref(wall_label)],
-            ifc.ref(f"{wall_label}_mat_layerset"))
+    if kind not in ("door", "window"):
+        return True
+    cls = "IfcDoor" if kind == "door" else "IfcWindow"
+    fill = api.run("root.create_entity", f, ifc_class=cls, predefined_type=kind.upper(), name=op.get("id", kind))
+    fill.ObjectPlacement = _placement(f, opening.ObjectPlacement)
+    fill.Representation = f.createIfcProductDefinitionShape(
+        None, None, [_box(f, ctx["body"], 0, -FILL_THICKNESS / 2, sill, w, FILL_THICKNESS, head - sill)])
+    fill.OverallWidth, fill.OverallHeight = w, head - sill
+    api.run("feature.add_filling", f, opening=opening, element=fill)
+    api.run("spatial.assign_container", f, products=[fill], relating_structure=storey)
+    return True
 
 
-def export_opening(ifc: IFCWriter, opening: dict, storey_ref: str, idx: int) -> None:
-    """Экспорт проёма (дверь/окно) в IFC."""
-    opening_type = opening["opening_type"]
-    opening_label = f"{opening_type}_{idx}"
+def _add_space(f, ctx, storey, room: dict, height: float) -> bool:
+    import ifcopenshell.api as api
 
-    a = opening["a"]
-    b = opening["b"]
-    width = opening["width"]
-    height = opening.get("head", 2.1) - opening.get("sill", 0.0) if opening_type == "window" else 2.1
-    sill = opening.get("sill", 0.0)
-
-    # Размещение
-    x, y = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
-    ifc.add("IFCCARTESIANPOINT", [x, y, sill], label=f"{opening_label}_origin")
-    ifc.add("IFCAXIS2PLACEMENT3D", ifc.ref(f"{opening_label}_origin"), "$", "$",
-            label=f"{opening_label}_axis")
-    ifc.add("IFCLOCALPLACEMENT", ifc.ref(f"{storey_ref}_placement"),
-            ifc.ref(f"{opening_label}_axis"), label=f"{opening_label}_placement")
-
-    # Профиль (прямоугольник)
-    ifc.add("IFCRECTANGLEPROFILEDEF", ".AREA.", opening_label, "$",
-            width, height, label=f"{opening_label}_profile")
-
-    # Выдавливание
-    ifc.add("IFCDIRECTION", [0.0, 0.0, 1.0], label=f"{opening_label}_dir")
-    ifc.add("IFCEXTRUDEDAREASOLID", ifc.ref(f"{opening_label}_profile"), "$",
-            ifc.ref(f"{opening_label}_dir"), 0.1, label=f"{opening_label}_geom")
-
-    # Представление
-    ifc.add("IFCSHAPEREPRESENTATION", ifc.ref("body_context"), "Body", "SweptSolid",
-            [ifc.ref(f"{opening_label}_geom")], label=f"{opening_label}_rep")
-    ifc.add("IFCPRODUCTDEFINITIONSHAPE", "$", "$", [ifc.ref(f"{opening_label}_rep")],
-            label=f"{opening_label}_shape")
-
-    # Элемент
-    if opening_type == "door":
-        entity_type = "IFCDOOR"
-    elif opening_type == "window":
-        entity_type = "IFCWINDOW"
-    else:
-        entity_type = "IFCOPENINGELEMENT"
-
-    ifc.add(entity_type, _guid(), ifc.ref("owner_history"), opening.get("id", opening_label),
-            f"{width:.2f}m x {height:.2f}m", "$", ifc.ref(f"{opening_label}_placement"),
-            ifc.ref(f"{opening_label}_shape"), "$",
-            height if opening_type in ["door", "window"] else "$",
-            width if opening_type in ["door", "window"] else "$",
-            label=opening_label)
-
-    # Связь с этажом
-    ifc.add("IFCRELCONTAINEDINSPATIALSTRUCTURE", _guid(), ifc.ref("owner_history"),
-            f"{opening_label}_containment", "$", [ifc.ref(opening_label)], ifc.ref(storey_ref))
+    pts = [tuple(map(float, p)) for p in room["points"]]
+    if len(pts) > 1 and np.allclose(pts[0], pts[-1]):
+        pts = pts[:-1]
+    if len(pts) < 3:
+        return False
+    sp = api.run("root.create_entity", f, ifc_class="IfcSpace", predefined_type="INTERNAL",
+                 name=room.get("name") or room.get("id"))
+    sp.LongName = room.get("name")
+    sp.ObjectPlacement = _placement(f, storey.ObjectPlacement)
+    prof = f.createIfcArbitraryClosedProfileDef(
+        "AREA", None, f.createIfcPolyline([f.createIfcCartesianPoint(p) for p in pts + pts[:1]]))
+    solid = f.createIfcExtrudedAreaSolid(
+        prof, f.createIfcAxis2Placement3D(f.createIfcCartesianPoint([0.0, 0.0, 0.0]), None, None),
+        f.createIfcDirection([0.0, 0.0, 1.0]), float(height))
+    sp.Representation = f.createIfcProductDefinitionShape(
+        None, None, [f.createIfcShapeRepresentation(ctx["body"], "Body", "SweptSolid", [solid])])
+    api.run("aggregate.assign_object", f, products=[sp], relating_object=storey)
+    area = room.get("area")
+    if area is None:
+        x, y = np.array(pts).T
+        area = 0.5 * abs(float(x @ np.roll(y, -1) - y @ np.roll(x, -1)))
+    perim = room.get("perimeter") or float(sum(math.dist(p, q) for p, q in zip(pts, pts[1:] + pts[:1])))
+    qto = api.run("pset.add_qto", f, product=sp, name="Qto_SpaceBaseQuantities")
+    api.run("pset.edit_qto", f, qto=qto, properties={"NetFloorArea": float(area), "GrossPerimeter": float(perim),
+                                                     "Height": float(height)})
+    return True
 
 
-def export_room(ifc: IFCWriter, room: dict, storey_ref: str, idx: int) -> None:
-    """Экспорт помещения (IfcSpace) в IFC."""
-    room_label = f"space_{idx}"
-    points = room["points"]
-    area = room["area"]
+def export_plans(plans: list[dict], output_ifc: Path, project_name: str = "Apartment scan", log=print):
+    """Векторные планы уровней (словари plan.json) -> один IFC, этаж на уровень."""
+    import ifcopenshell.api as api
 
-    if len(points) < 3:
-        return
+    f, ctx, building = _new_file(project_name)
+    mats: dict = {}
+    for i, plan in enumerate(plans):
+        level = str(plan.get("level", f"L{i + 1}"))
+        floor_z = float(plan.get("floor_z") or 0.0)
+        ceil_z = plan.get("ceiling_z")
+        height = float(ceil_z) - floor_z if ceil_z is not None else DEFAULT_STOREY_H
+        if not 1.5 <= height <= 10.0:
+            log(f"  {level}: высота {height:.2f} м вне 1,5-10 м, взято {DEFAULT_STOREY_H} м")
+            height = DEFAULT_STOREY_H
+        storey = api.run("root.create_entity", f, ifc_class="IfcBuildingStorey", name=level)
+        storey.Elevation = floor_z
+        storey.ObjectPlacement = _placement(f, building.ObjectPlacement, (0.0, 0.0, floor_z))
+        api.run("aggregate.assign_object", f, products=[storey], relating_object=building)
 
-    # Геометрия: замкнутый контур
-    pt_refs = []
-    for i, (x, y) in enumerate(points):
-        pt_label = f"{room_label}_pt{i}"
-        ifc.add("IFCCARTESIANPOINT", [x, y], label=pt_label)
-        pt_refs.append(ifc.ref(pt_label))
-
-    # Замыкаем контур
-    pt_refs.append(pt_refs[0])
-
-    ifc.add("IFCPOLYLINE", pt_refs, label=f"{room_label}_boundary")
-    ifc.add("IFCARBITRARYCLOSEDPROFILEDEF", ".AREA.", room.get("name", f"Room {idx}"),
-            ifc.ref(f"{room_label}_boundary"), label=f"{room_label}_profile")
-
-    # Выдавливание на высоту этажа
-    ifc.add("IFCDIRECTION", [0.0, 0.0, 1.0], label=f"{room_label}_dir")
-    ifc.add("IFCEXTRUDEDAREASOLID", ifc.ref(f"{room_label}_profile"), "$",
-            ifc.ref(f"{room_label}_dir"), 3.0, label=f"{room_label}_geom")
-
-    # Представление
-    ifc.add("IFCSHAPEREPRESENTATION", ifc.ref("body_context"), "Body", "SweptSolid",
-            [ifc.ref(f"{room_label}_geom")], label=f"{room_label}_rep")
-    ifc.add("IFCPRODUCTDEFINITIONSHAPE", "$", "$", [ifc.ref(f"{room_label}_rep")],
-            label=f"{room_label}_shape")
-
-    # Размещение
-    create_local_placement(ifc, f"{storey_ref}_placement", 0.0, f"{room_label}_placement")
-
-    # Помещение
-    ifc.add("IFCSPACE", _guid(), ifc.ref("owner_history"), room.get("name", f"Room {idx}"),
-            f"Area: {area:.2f} m²", "$", ifc.ref(f"{room_label}_placement"),
-            ifc.ref(f"{room_label}_shape"), "$", ".INTERNAL.", "$", "$", "$",
-            label=room_label)
-
-    # Связь с этажом
-    ifc.add("IFCRELCONTAINEDINSPATIALSTRUCTURE", _guid(), ifc.ref("owner_history"),
-            f"{room_label}_containment", "$", [ifc.ref(room_label)], ifc.ref(storey_ref))
-
-    # Свойства площади
-    ifc.add("IFCPROPERTYSINGLEVALUE", "NetFloorArea", "$",
-            ifc.add("IFCAREAMEASURE", area), "$", label=f"{room_label}_area_prop")
-
-    ifc.add("IFCPROPERTYSET", _guid(), ifc.ref("owner_history"), "Pset_SpaceCommon",
-            "$", [ifc.ref(f"{room_label}_area_prop")], label=f"{room_label}_pset")
-
-    ifc.add("IFCRELDEFINESBYPROPERTIES", _guid(), ifc.ref("owner_history"),
-            f"{room_label}_props", "$", [ifc.ref(room_label)],
-            ifc.ref(f"{room_label}_pset"))
-
-
-# ----------------------------------------------------------------------
-# Главная функция экспорта
-# ----------------------------------------------------------------------
-
-def export_to_ifc(plan_json: Path, output_ifc: Path, log=print) -> None:
-    """Экспорт векторного плана из JSON в IFC."""
-    log(f"Загрузка плана из {plan_json}...")
-    plan_data = json.loads(plan_json.read_text(encoding="utf-8"))
-
-    ifc = IFCWriter()
-
-    log("Создание структуры IFC...")
-
-    # Базовые элементы
-    create_origin(ifc)
-    create_owner_history(ifc)
-    create_ifc_header(ifc, project_name="Apartment Scan")
-    create_local_placement(ifc)
-
-    # Этаж
-    floor_z = plan_data.get("floor_z", 0.0)
-    storey_label = f"storey_L{plan_data.get('level', 1)}"
-    create_storey(ifc, f"Level {plan_data.get('level', 1)}", floor_z, storey_label)
-
-    # Стены
-    log(f"Экспорт стен: {len(plan_data.get('walls', []))}...")
-    for idx, wall in enumerate(plan_data.get("walls", [])):
-        export_wall(ifc, wall, storey_label, idx)
-
-    # Проёмы
-    log(f"Экспорт проёмов: {len(plan_data.get('openings', []))}...")
-    for idx, opening in enumerate(plan_data.get("openings", [])):
-        export_opening(ifc, opening, storey_label, idx)
-
-    # Помещения
-    log(f"Экспорт помещений: {len(plan_data.get('rooms', []))}...")
-    for idx, room in enumerate(plan_data.get("rooms", [])):
-        export_room(ifc, room, storey_label, idx)
-
-    # Запись файла
-    log(f"Запись IFC в {output_ifc}...")
-    ifc.write(output_ifc)
-    log(f"Готово. Экспортировано {len(ifc.entities)} сущностей.")
+        segs, by_id, curved = [], {}, {}
+        for wall in plan.get("walls", []):
+            if _curved(wall):                                  # дуга - одна стена
+                cw = _add_curved_wall(f, ctx, storey, mats, wall, height, wall.get("id", "wall"))
+                curved[wall.get("id")] = cw
+                for a, b in _segments(wall["points"]):         # для поиска хозяина проёма
+                    L = float(np.linalg.norm(b - a))
+                    segs.append({"wall": cw["wall"], "a": a, "u": (b - a) / L, "L": L, "t": cw["t"],
+                                 "curved": wall.get("id")})
+                continue
+            parts = _segments(wall.get("points", []))
+            for k, (a, b) in enumerate(parts):
+                name = wall.get("id", "wall") + (f".{k}" if len(parts) > 1 else "")
+                seg = _add_wall(f, ctx, storey, mats, wall, a, b, height, name)
+                segs.append(seg)
+                by_id.setdefault(wall.get("id"), []).append(seg)
+        n_op = 0
+        for op in plan.get("openings", []):
+            cid = op.get("wall_id") if op.get("wall_id") in curved else None
+            if cid is None:
+                seg = _host(segs, by_id, op)
+                cid = seg.get("curved") if seg is not None else None
+            if cid is not None:                                # в дуговой стене - по хорде проёма
+                seg = _chord_seg(f, storey, curved[cid], op)
+            if seg is None:
+                log(f"  проём {op.get('id')} пропущен: нет стен")
+                continue
+            n_op += _add_opening(f, ctx, storey, seg, op, height, log)
+        n_sp = sum(_add_space(f, ctx, storey, r, height) for r in plan.get("rooms", []))
+        n_w = len({id(sg["wall"]) for sg in segs})
+        log(f"{level}: отметка {floor_z:.3f} м, высота {height:.2f} м; стен {n_w} (дуговых {len(curved)}), "
+            f"проёмов {n_op} из {len(plan.get('openings', []))}, помещений {n_sp}")
+    output_ifc = Path(output_ifc)
+    output_ifc.parent.mkdir(parents=True, exist_ok=True)
+    f.write(str(output_ifc))
+    log(f"Записано: {output_ifc}")
+    return f
 
 
-def _guid() -> str:
-    """Генерация IFC GUID (base64 кодирование UUID)."""
-    uid = uuid.uuid4()
-    b = uid.bytes
-    # IFC использует специальную base64 кодировку
-    chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$"
-    result = []
-    for i in range(0, 16, 3):
-        chunk = (b[i] << 16) | (b[i+1] << 8) | b[i+2] if i+2 < 16 else (b[i] << 16) | (b[i+1] << 8) if i+1 < 16 else b[i] << 16
-        for _ in range(4):
-            result.append(chars[chunk & 0x3F])
-            chunk >>= 6
-    return ''.join(result[:22])
+def export_to_ifc(plan_json, output_ifc, log=print):
+    """plan.json (один путь или список) -> IFC."""
+    paths = [plan_json] if isinstance(plan_json, (str, Path)) else list(plan_json)
+    plans = [json.loads(Path(p).read_text(encoding="utf-8")) for p in paths]
+    return export_plans(plans, Path(output_ifc), log=log)
 
-
-# ----------------------------------------------------------------------
-# CLI
-# ----------------------------------------------------------------------
 
 def main_export_ifc(plan_json, output_ifc, log=print):
     """CLI для экспорта в IFC."""
-    export_to_ifc(Path(plan_json), Path(output_ifc), log=log)
+    return export_to_ifc(plan_json, output_ifc, log=log)

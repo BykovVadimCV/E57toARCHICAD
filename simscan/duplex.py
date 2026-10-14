@@ -347,9 +347,9 @@ def build_duplex_scene(lower: Layout, upper: Layout, dz: float, real: dict, real
     from . import realism
     from .scene import SceneMesh, build_scene
 
-    mesh0, solids0 = build_scene(lower, real.get("tessellation_m"))
+    mesh0, solids0 = build_scene(lower, realism.tessellation(real))
     realism.apply_to_mesh(mesh0, real)
-    mesh1, solids1 = build_scene(upper, real.get("tessellation_m"))
+    mesh1, solids1 = build_scene(upper, realism.tessellation(real_up))
     realism.apply_to_mesh(mesh1, real_up)
     mesh1.vertices = mesh1.vertices + np.array([0, 0, dz], np.float32)
     off = int(mesh0.tri_instance.max()) + 1 if len(mesh0.tri_instance) else 1

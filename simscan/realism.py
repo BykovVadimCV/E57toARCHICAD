@@ -11,7 +11,9 @@
      случайных косинусов (Random Fourier Features), то есть гауссово поле с заданными
      СКО и длиной корреляции; в эталон не попадает (это «шум поверхности»);
   3. сдвиг плана - аффинное преобразование A всей сцены в плане: угол между осями
-     90 +- shear. Применяется и к эталону (на 10 м это сантиметры).
+     90 +- shear. Применяется и к эталону (на 10 м это сантиметры);
+  4. углы между стенами не 90° и дуговые стены - нелинейная деформация плана
+     (planwarp.py, разыгрывается в generate.py по готовой планировке); A входит в неё.
 """
 from __future__ import annotations
 
@@ -75,18 +77,34 @@ def displacement(p: np.ndarray, params: dict) -> np.ndarray:
 
 
 def warp_xy(xy: np.ndarray, params: dict) -> np.ndarray:
-    A = np.asarray(params.get("warp", np.eye(2)))
-    return np.asarray(xy, float) @ A.T
+    from .planwarp import PlanWarp
+
+    return PlanWarp(params.get("warp"))(xy)
+
+
+def tessellation(params: dict) -> float | None:
+    """Шаг разбиения архитектуры: realism.tessellation_m; при нелинейной деформации плана
+    (наклоны, дуги) - всегда, иначе стены и перекрытия не повторят её."""
+    from .planwarp import PlanWarp
+
+    t = params.get("tessellation_m") if params.get("enabled") else None
+    if t is None and not PlanWarp(params.get("warp")).linear:
+        t = 0.3
+    return t
 
 
 def apply_to_mesh(mesh, params: dict):
     """Деформировать вершины сцены на месте и вернуть её же."""
-    if not params.get("enabled"):
+    from .planwarp import PlanWarp
+
+    W = PlanWarp(params.get("warp"))
+    if not params.get("enabled") and W.identity:
         return mesh
     v = mesh.vertices.astype(np.float64)
     m = mesh.vert_deform
-    if m.any():
+    if params.get("enabled") and m.any():
         v[m] += displacement(v[m], params)
-    v[:, :2] = warp_xy(v[:, :2], params)
+    if not W.identity:
+        v[:, :2] = W(v[:, :2])
     mesh.vertices = v.astype(np.float32)
     return mesh

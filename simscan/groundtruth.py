@@ -12,6 +12,10 @@
     windows - проёмы окон в толще стены;
     rooms   - номер помещения + 1 (uint16), 0 - вне помещений и в стенах.
 Мебель, радиаторы, короба на эталон не попадают.
+
+Деформация плана (planwarp.py: сдвиг, наклоны линий стен, дуги) применяется к эталону так
+же, как к сетке: сдвиг - точно по углам; нелинейная - по кускам тел не длиннее
+WARP_STEP_M, каждый кусок - четырёхугольник по образам своих углов.
 """
 from __future__ import annotations
 
@@ -28,6 +32,8 @@ from .scene import Solid
 from .transform import WorldTransform
 
 CLASSES = {0: "background", 1: "wall", 2: "door", 3: "window"}
+WARP_STEP_M = 0.05          # кусок тела вдоль длинной стороны при нелинейной деформации
+WARP_TILE_M = 0.2           # плитка помещения при нелинейной деформации
 
 
 @dataclass
@@ -51,19 +57,18 @@ class RasterFrame:
 
 
 def layout_warp(layout: Layout):
-    """Сдвиг плана из realism (матрица 2x2) или None, если его нет."""
-    A = layout.meta.get("warp")
-    if A is None or np.allclose(A, np.eye(2)):
-        return None
-    return np.asarray(A, float)
+    """Деформация плана (planwarp.PlanWarp) или None, если её нет."""
+    from .planwarp import layout_warp as _lw
+
+    return _lw(layout)
 
 
 def warped_bbox(layout: Layout):
     x0, y0, x1, y1 = layout.bbox()
-    A = layout_warp(layout)
-    if A is None:
+    W = layout_warp(layout)
+    if W is None:
         return x0, y0, x1, y1
-    c = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]) @ A.T
+    c = W.poly(np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]), step=0.1)
     return (*c.min(0), *c.max(0))
 
 
@@ -120,11 +125,37 @@ def _box_corners(box: Box):
                      for u, v in ((-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy))])
 
 
+def _pieces(corners: np.ndarray, step_u: float, step_v: float):
+    """Четырёхугольник (углы по обходу: 0-1 - сторона u) -> куски не больше step_u x step_v."""
+    a, b, c, d = corners
+    nu = max(1, int(math.ceil(np.linalg.norm(b - a) / step_u)))
+    nv = max(1, int(math.ceil(np.linalg.norm(d - a) / step_v)))
+    for i in range(nu):
+        for j in range(nv):
+            u0, u1, v0, v1 = i / nu, (i + 1) / nu, j / nv, (j + 1) / nv
+            yield np.array([a + (b - a) * u + (d - a) * v for u, v in ((u0, v0), (u1, v0), (u1, v1), (u0, v1))])
+
+
+def raster_warped(frame: RasterFrame, mask: np.ndarray, corners, warp, value=True,
+                  step_u: float = WARP_STEP_M, step_v: float = 1e9) -> None:
+    """Четырёхугольник СК планировки после деформации: сдвиг - как есть, нелинейная - кусками."""
+    corners = np.asarray(corners, float)
+    if warp.linear:
+        raster_quad(frame, mask, warp(corners), value)
+        return
+    for q in _pieces(corners, step_u, step_v):
+        raster_quad(frame, mask, warp(q), value)
+
+
 def raster_box(frame: RasterFrame, mask: np.ndarray, box: Box, value=True, warp=None) -> None:
     """След параллелепипеда на плане; осевые - точно, повёрнутые - по центрам пикселей.
-    warp - сдвиг плана (2x2): след становится параллелограммом."""
+    warp - деформация плана (PlanWarp): сдвиг - параллелограмм, нелинейная - кусками вдоль
+    длинной стороны."""
     if warp is not None:
-        raster_quad(frame, mask, _box_corners(box) @ warp.T, value)
+        q = _box_corners(box)
+        if box.size[1] > box.size[0]:                        # сторона u - длинная
+            q = q[[1, 2, 3, 0]]
+        raster_warped(frame, mask, q, warp, value, WARP_STEP_M, 0.25)
         return
     cx, cy, _ = box.center
     sx, sy, _ = box.size
@@ -181,8 +212,8 @@ def build_masks(layout: Layout, solids: list[Solid], frame: RasterFrame,
                 raster_rect(frame, rooms, rect, r.id + 1)
             else:
                 x0, y0, x1, y1 = rect
-                raster_quad(frame, rooms, np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]) @ A.T,
-                            r.id + 1)
+                raster_warped(frame, rooms, np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]), A,
+                              r.id + 1, WARP_TILE_M, WARP_TILE_M)
     rooms[walls | doors | windows] = 0
     classes = np.zeros(shape, np.uint8)
     classes[walls], classes[doors], classes[windows] = 1, 2, 3
@@ -194,17 +225,23 @@ def describe(layout: Layout, masks: dict, frame: RasterFrame, world: WorldTransf
     """gt.json: привязка растра, размеры в мм и площади для отчёта о точности."""
     px2 = frame.pixel_m ** 2
     A = layout_warp(layout)
-    Wp = (lambda p: np.asarray(p, float)) if A is None else (lambda p: np.asarray(p, float) @ A.T)
+
+    def Wl(a, b):
+        """Отрезок СК планировки -> ломаная (2 точки без нелинейной деформации)."""
+        pts = np.array([a, b], float)
+        q = pts if A is None else A.poly(pts, 0.1, closed=False)
+        return q.round(4).tolist()
+
+    def Wp(p):
+        return np.asarray(p, float) if A is None else A(p)[0]
+
     walls = []
     for w in layout.walls:
-        faces = []
-        for side in (-1, 1):
-            off = side * w.thickness / 2
-            faces.append([Wp(w.point(-w.ext0, off)).round(4).tolist(),
-                          Wp(w.point(w.length + w.ext1, off)).round(4).tolist()])
+        faces = [Wl(w.point(-w.ext0, side * w.thickness / 2), w.point(w.length + w.ext1, side * w.thickness / 2))
+                 for side in (-1, 1)]
         walls.append({"id": w.id, "kind": w.kind, "thickness_mm": round(w.thickness * 1000, 1),
-                      "axis": [Wp(w.p0).round(4).tolist(), Wp(w.p1).round(4).tolist()],
-                      "faces": faces})
+                      "axis": Wl(w.p0, w.p1), "faces": faces,
+                      **({"arc": True} if A is not None and w.id in A.arc_walls() else {})})
     openings = []
     for o in layout.openings:
         c = Wp(layout.wall(o.wall_id).point(o.s))
@@ -225,7 +262,7 @@ def describe(layout: Layout, masks: dict, frame: RasterFrame, world: WorldTransf
         "pixel_formula": "x = origin_x + (j + 0.5) * px; y = origin_y + (H - 1 - i + 0.5) * px "
                          "(СК планировки, затем layout_to_world)",
         "cut_height_m": cut_z,
-        "warp": None if A is None else A.tolist(),
+        "warp": None if A is None else A.to_dict(),
         "classes": CLASSES,
         "layout_to_world": world.to_dict(),
         "ceiling_height_m": layout.ceiling_height,

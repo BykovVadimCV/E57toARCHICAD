@@ -1,913 +1,692 @@
-"""Vectorization via rectangle decomposition with semantic opening extraction.
+"""Векторизация предсказаний сети: вероятности классов -> стены (оси, толщины, прямые и дуги),
+проёмы, помещения. Только по выходу сети (prob.npz, orient.npy, heights.npy, scene.json) -
+без облака; с облаком лучше cellplan.py, он берёт эти же вероятности.
 
-Replaces skeletonization with rect_decompose (greedy rectangle decomposition)
-for robust wall extraction. Produces clean axis-aligned segments with accurate
-thickness from rectangle dimensions.
+    python -m simscan vectorize pred/kvartira/L1 --out vectors/L1
+    -> plan.json (для export-ifc), plan.svg, plan.png
 
-Key improvements over skeleton-based approach:
-- Direct mask decomposition → no 1px skeleton fragility
-- Accurate thickness from rectangle short-side dimensions
-- Proper mask post-processing (morphological cleanup, enclosed-region refinement)
-- Semantic door/window extraction from U-Net classes (not proximity matching)
-- Collinear segment merging and endpoint snapping
+Шаги (пиксели растра сети, в конце - мировые метры через scene.json pixel_to_world):
+  1. конструкция = стена + дверь + окно + проём (проёмы не рвут стену), порог с гистерезисом
+     по сумме вероятностей: слабые пиксели остаются, если связаны с уверенными; мелочь - вон;
+  2. скелет (Zhang-Suen) -> граф: узлы - стыки и концы, рёбра - цепочки; короткие отростки у
+     стыков (артефакт утончения толстых стен) отрезаются;
+  3. каждое ребро -> прямые и дуги рекурсивным разбиением: прямая, если все точки ближе tol,
+     иначе дуга (окружность Касы, R 1,5-40 м), иначе разрез в самой дальней от хорды точке.
+     Толщина - по карте расстояний маски на оси; направление короткой прямой - по голове
+     ориентации сети (длинной - по точкам);
+  4. направления прямых - кластеры по 1° по длинным стенам (от 1 м), короткая прямая
+     притягивается к ближайшему направлению ближе 5° (walls.regularize): дрожание уходит,
+     85-95° остаётся;
+  5. соосные прямые - одна стена; концы - до пересечения осей (L, T, дуги); оборванный конец
+     (пропуск сети) дотягивается до GAP_M (walls.merge_collinear, walls.join);
+     Чистка: висящий конец ещё раз тянется к соседней стене; вон - одиночный кусок короче
+     1 м (пятно шума), огрызок с висящим концом короче 0,5 м, перемычка короче 25 см между
+     двумя стенами (остаток утончения на стыке), короткая тень вдоль длинной стены (walls.tidy);
+  6. проёмы: компоненты вероятности двери / окна / проёма (гистерезис), хозяин - ближайшая
+     стена; концы - проекция на её ось; низ и верх - медиана головы высот;
+  7. помещения: что сеть считает помещением, за вычетом стен (итоговых и маски); сужения уже
+     40 см рвутся - комнаты не сливаются через щели; контур - упрощённый.
+  Наружная стена - та, у которой за одной из граней улица.
 """
 from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Literal
 
-import cv2
 import numpy as np
-from PIL import Image
 
-from . import rect_decompose as rd
+from .walls import join, merge_collinear, regularize, tidy
 
+STRUCT = (2, 3, 4, 5)
+INTERIOR = (1, 6, 7)                 # помещение, мебель, проём перекрытия
+OPEN_KIND = {3: "door", 4: "window", 5: "opening"}
 
-@dataclass
-class WallSegment:
-    """Сегмент стены."""
-    id: str
-    points: list[list[float]]
-    thickness: float
-    rooms: list[str]
-    is_outer: bool
-    length: float
-
-
-@dataclass
-class Opening:
-    """Проём в стене."""
-    id: str
-    opening_type: Literal["door", "window", "opening"]
-    wall_id: str
-    a: list[float]
-    b: list[float]
-    width: float
-    sill: float | None = None
-    head: float | None = None
-
-
-@dataclass
-class Room:
-    """Помещение."""
-    id: str
-    name: str
-    points: list[list[float]]
-    area: float
-    perimeter: float
-    label_xy: tuple[float, float] = (0.0, 0.0)
-    is_enclosed: bool = False
-
-
-@dataclass
-class VectorPlan:
-    """Векторизованный план уровня."""
-    level: str
-    floor_z: float
-    ceiling_z: float
-    walls: list[WallSegment] = field(default_factory=list)
-    openings: list[Opening] = field(default_factory=list)
-    rooms: list[Room] = field(default_factory=list)
-    frame: dict = field(default_factory=dict)
-    metadata: dict = field(default_factory=dict)
+P_HI, P_LO = 0.5, 0.3                # гистерезис конструкции
+MIN_WALL_M = 0.15                    # прямая короче - не стена
+MIN_SPLIT_M = 0.25                   # кусок короче не дробится (шум скелета - не излом)
+SMOOTH_PX = 5                        # окно сглаживания цепочки перед подгонкой
+TOL_PX = 1.5                         # допуск ломаной от точек скелета
+ARC_R = (1.5, 40.0)                  # радиусы дуг, м
+ARC_MIN_CHORD_M = 1.0                # дуга: хорда не короче,
+ARC_MIN_SAG_M = 0.08                 # стрела не меньше и окружность в 3 раза точнее прямой
+MIN_ROOM_M2 = 1.0
+GAP_M = 0.5                          # закрываемый разрыв стены
+GAP_MAX_M = 0.8                      # и до стольких - если в щели есть хоть слабая конструкция
 
 
 # ----------------------------------------------------------------------
-# Coordinate utilities
+# Маска и скелет
 # ----------------------------------------------------------------------
 
-def px_to_world(ji: np.ndarray, frame: dict) -> np.ndarray:
-    """Convert (col, row) pixel coords to (x, y) world coords."""
-    px = frame["pixel_m"]
-    H = frame["height"]
-    j, i = ji[:, 0], ji[:, 1]
-    x = frame["origin_x"] + (j + 0.5) * px
-    y = frame["origin_y"] + (H - 1 - i + 0.5) * px
-    return np.c_[x, y]
+def struct_mask(prob: np.ndarray, px: float) -> np.ndarray:
+    """Конструкция с гистерезисом: слабая компонента остаётся, если в ней есть уверенные
+    пиксели или она протяжённая (габарит от 0,6 м - тонкая наружная полоса, у которой
+    сеть неуверенна по всей длине); мелочь (меньше ~0,3 м x 3 px) - шум."""
+    import cv2
+
+    p = prob[list(STRUCT)].sum(0)
+    weak = (p > P_LO).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(weak, connectivity=8)
+    strong = np.bincount(lab[p > P_HI], minlength=n) > 0
+    long_ = np.hypot(st[:, cv2.CC_STAT_WIDTH], st[:, cv2.CC_STAT_HEIGHT]) * px >= 0.6
+    keep = (strong | long_) & (st[:, cv2.CC_STAT_AREA] >= max(8, int(0.3 / px * 3)))
+    keep[0] = False
+    m = keep[lab].astype(np.uint8)
+    return cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)).astype(bool)
 
 
-def world_to_px(xy: np.ndarray, frame: dict) -> np.ndarray:
-    """Convert (x, y) world coords to (col, row) pixel coords."""
-    px = frame["pixel_m"]
-    H = frame["height"]
-    j = (xy[:, 0] - frame["origin_x"]) / px - 0.5
-    i = H - 1 - ((xy[:, 1] - frame["origin_y"]) / px - 0.5)
-    return np.c_[j, i]
+def thin(mask: np.ndarray) -> np.ndarray:
+    """Скелет Zhang-Suen (numpy, в габарите маски)."""
+    ys, xs = np.nonzero(mask)
+    out = np.zeros_like(mask, bool)
+    if not len(ys):
+        return out
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    img = np.pad(mask[y0:y1, x0:x1], 1).astype(np.uint8)
+    while True:
+        changed = False
+        for step in (0, 1):
+            P = np.pad(img, 1)
+            p2, p3, p4, p5 = P[:-2, 1:-1], P[:-2, 2:], P[1:-1, 2:], P[2:, 2:]
+            p6, p7, p8, p9 = P[2:, 1:-1], P[2:, :-2], P[1:-1, :-2], P[:-2, :-2]
+            nb = [p2, p3, p4, p5, p6, p7, p8, p9, p2]
+            B = sum(nb[:8])
+            A = sum(((nb[k] == 0) & (nb[k + 1] == 1)).astype(np.uint8) for k in range(8))
+            if step == 0:
+                c = (p2 * p4 * p6 == 0) & (p4 * p6 * p8 == 0)
+            else:
+                c = (p2 * p4 * p8 == 0) & (p2 * p6 * p8 == 0)
+            rem = (img == 1) & (B >= 2) & (B <= 6) & (A == 1) & c
+            if rem.any():
+                img[rem] = 0
+                changed = True
+        if not changed:
+            break
+    out[y0:y1, x0:x1] = img[1:-1, 1:-1].astype(bool)
+    return out
 
 
-# ----------------------------------------------------------------------
-# Mask pre-processing
-# ----------------------------------------------------------------------
-
-def preprocess_wall_mask(
-    wall_mask: np.ndarray,
-    door_mask: np.ndarray,
-    window_mask: np.ndarray,
-    min_area_px: int = 50,
-    morph_close_kernel: int = 3,
-) -> np.ndarray:
-    """
-    Clean wall mask before decomposition:
-    1. Remove small noise blobs (< min_area_px)
-    2. Carve out doors and windows
-    3. Light morphological closing to bridge 1-2px gaps
-    """
-    # Remove noise
-    wall_clean = wall_mask.copy()
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(wall_clean.astype(np.uint8), connectivity=8)
-    for i in range(1, n):
-        if stats[i, cv2.CC_STAT_AREA] < min_area_px:
-            wall_clean[labels == i] = 0
-
-    # Carve openings
-    wall_clean &= ~door_mask
-    wall_clean &= ~window_mask
-
-    # Light morphological close to bridge tiny gaps
-    if morph_close_kernel > 0:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_close_kernel, morph_close_kernel))
-        wall_clean = cv2.morphologyEx(wall_clean.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
-
-    return wall_clean.astype(bool)
+_NB = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 
-def refine_wall_mask_by_enclosed_regions(
-    original_img: np.ndarray,
-    wall_mask: np.ndarray,
-    coverage_threshold: float = 0.25,
-    black_threshold: int = 60,
-    white_threshold: int = 220,
-) -> np.ndarray:
-    """
-    Enclosed-region refinement (borrowed from ReFloorBRUSNIKA):
-    1. Find white enclosed regions via flood-fill
-    2. For each region: if wall coverage >= threshold → fill; else erase walls
-    3. Fixes hollow walls and removes floating fragments
-    """
-    if original_img is None:
-        return wall_mask
+def unstair(sk: np.ndarray) -> np.ndarray:
+    """Лишние пиксели «лесенки» наклонной линии: угол, чьи два соседа (по вертикали и по
+    горизонтали) сами соседи по диагонали, а с противоположной стороны пусто. После
+    Zhang-Suen у них три соседа, и граф принял бы каждую ступеньку за стык."""
+    sk = sk.copy()
+    H, W = sk.shape
+    # (соседи, которые должны быть, и которые должны быть пусты) для четырёх поворотов угла
+    pats = [(((-1, 0), (0, 1)), ((1, 0), (0, -1), (1, -1))),
+            (((0, 1), (1, 0)), ((-1, 0), (0, -1), (-1, -1))),
+            (((1, 0), (0, -1)), ((-1, 0), (0, 1), (-1, 1))),
+            (((0, -1), (-1, 0)), ((1, 0), (0, 1), (1, 1)))]
+    for on, off in pats:
+        P = np.pad(sk, 1)
+        sh = lambda dy, dx: P[1 + dy:1 + dy + H, 1 + dx:1 + dx + W]       # noqa: E731
+        m = sk.copy()
+        for dy, dx in on:
+            m &= sh(dy, dx)
+        for dy, dx in off:
+            m &= ~sh(dy, dx)
+        sk &= ~m
+    return sk
 
-    # Convert to grayscale
-    if len(original_img.shape) == 3:
-        gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
-    else:
-        gray = original_img
 
-    # Build enclosed regions: near-white pixels only, everything else is barrier
-    H, W = gray.shape
-    is_white = (gray >= white_threshold).astype(np.uint8)
+def _degree(sk: np.ndarray) -> np.ndarray:
+    P = np.pad(sk.astype(np.uint8), 1)
+    H, W = sk.shape
+    return sum(P[1 + dy:1 + dy + H, 1 + dx:1 + dx + W] for dy, dx in _NB) * sk
 
-    # Flood from borders → mark exterior
-    flooded = is_white.copy()
-    for i in range(H):
-        if flooded[i, 0] > 0:
-            cv2.floodFill(flooded, None, (0, i), 0)
-        if flooded[i, W - 1] > 0:
-            cv2.floodFill(flooded, None, (W - 1, i), 0)
-    for j in range(W):
-        if flooded[0, j] > 0:
-            cv2.floodFill(flooded, None, (j, 0), 0)
-        if flooded[H - 1, j] > 0:
-            cv2.floodFill(flooded, None, (j, H - 1), 0)
 
-    # Remaining white = enclosed interior
-    interior_mask = flooded > 0
+def graph(sk: np.ndarray) -> list[dict]:
+    """Скелет -> рёбра {"pix": [(i, j)...], "ends": (узел или -1, ...)}. Узел - связная группа
+    пикселей степени >= 3 или конец (степень 1); замкнутая цепочка без узлов - ребро-кольцо."""
+    import cv2
 
-    # Label enclosed regions
-    n, labels = cv2.connectedComponents(interior_mask.astype(np.uint8), connectivity=8)
+    deg = _degree(sk)
+    node_px = sk & ((deg >= 3) | (deg == 1))
+    _, nid = cv2.connectedComponents(node_px.astype(np.uint8), connectivity=8)
+    H, W = sk.shape
+    chain = sk & ~node_px
+    seen = np.zeros_like(sk, bool)
+    edges = []
 
-    refined = wall_mask.copy()
-    wall_bin = wall_mask > 0
+    def nbrs(i, j):
+        for dy, dx in _NB:
+            y, x = i + dy, j + dx
+            if 0 <= y < H and 0 <= x < W and sk[y, x]:
+                yield y, x
 
-    for label_id in range(1, n):
-        region_mask = labels == label_id
-        region_area = int(np.sum(region_mask))
-        if region_area == 0:
+    def walk(start, first):
+        path = [start, first]
+        seen[first] = True
+        prev, cur = start, first
+        while True:
+            nxt = None
+            for q in nbrs(*cur):
+                if q == prev or (len(path) > 2 and q == path[-3]):
+                    continue
+                if node_px[q]:
+                    if nid[q] != nid[start] or len(path) > 3 or not node_px[start]:
+                        path.append(q)
+                        return path
+                    continue
+                if not seen[q]:
+                    nxt = q
+                    break
+            if nxt is None:
+                return path
+            seen[nxt] = True
+            path.append(nxt)
+            prev, cur = cur, nxt
+
+    for i, j in zip(*np.nonzero(node_px)):
+        for q in nbrs(i, j):
+            if chain[q] and not seen[q]:
+                p = walk((i, j), q)
+                end = p[-1]
+                edges.append({"pix": p, "ends": (int(nid[i, j]), int(nid[end]) if node_px[end] else -1)})
+            elif node_px[q] and nid[q] != nid[i, j] and (i, j) < q:
+                edges.append({"pix": [(i, j), q], "ends": (int(nid[i, j]), int(nid[q]))})
+    for i, j in zip(*np.nonzero(chain & ~seen)):           # кольца без узлов
+        if seen[i, j]:
             continue
+        seen[i, j] = True
+        q = next(nbrs(i, j), None)
+        if q is None:
+            continue
+        p = walk((i, j), q)
+        edges.append({"pix": p, "ends": (-1, -1), "ring": True})
+    return edges
 
-        wall_in_region = int(np.sum(wall_bin & region_mask))
-        coverage = wall_in_region / region_area
 
-        if coverage >= coverage_threshold:
-            refined[region_mask] = 255
+def prune_spurs(sk: np.ndarray, dt: np.ndarray, rounds: int = 2) -> np.ndarray:
+    """Отростки: ребро «стык - конец» короче полуторной толщины в стыке (утончение толстой
+    стены оставляет усы к углам)."""
+    sk = sk.copy()
+    for _ in range(rounds):
+        deg = _degree(sk)
+        removed = False
+        for e in graph(sk):
+            pix = e["pix"]
+            if len(pix) < 2:
+                continue
+            a, b = pix[0], pix[-1]
+            da, db = deg[a], deg[b]
+            if (da >= 3 and db == 1) or (db >= 3 and da == 1):
+                junc = a if da >= 3 else b
+                if len(pix) <= max(3.0, 1.5 * 2 * dt[junc]):
+                    for q in pix:
+                        if q != junc:
+                            sk[q] = False
+                    removed = True
+        if not removed:
+            break
+    return unstair(thin(sk))
+
+
+# ----------------------------------------------------------------------
+# Прямые и дуги по цепочке
+# ----------------------------------------------------------------------
+
+def _circle(pts: np.ndarray):
+    """Окружность Касы: (центр, радиус, СКО отклонения, макс. отклонение)."""
+    x, y = pts[:, 0], pts[:, 1]
+    A = np.c_[x, y, np.ones_like(x)]
+    b = x * x + y * y
+    sol, *_ = np.linalg.lstsq(A, b, rcond=None)
+    c = sol[:2] / 2
+    r = math.sqrt(max(sol[2] + c @ c, 1e-12))
+    e = np.abs(np.linalg.norm(pts - c, axis=1) - r)
+    return c, r, float(np.sqrt((e * e).mean())), float(e.max())
+
+
+def _smooth_chain(pts: np.ndarray, w: int) -> np.ndarray:
+    """Скользящее среднее вдоль цепочки (концы на месте): дрожание скелета ±1-2 px."""
+    if len(pts) <= w or w < 3:
+        return pts
+    k = np.ones(w) / w
+    pad = w // 2
+    q = np.vstack([np.repeat(pts[:1], pad, 0), pts, np.repeat(pts[-1:], pad, 0)])
+    out = np.c_[np.convolve(q[:, 0], k, "valid"), np.convolve(q[:, 1], k, "valid")]
+    out[0], out[-1] = pts[0], pts[-1]
+    return out
+
+
+def fit_chain(pts: np.ndarray, px: float, tol: float = TOL_PX) -> list[dict]:
+    """Цепочка точек -> [{"kind": "line"|"arc", "idx": (i0, i1), ...}] рекурсивным разбиением
+    (по сглаженной цепочке; кусок короче MIN_SPLIT_M не дробится)."""
+    out = []
+    pts = _smooth_chain(pts, SMOOTH_PX)
+    min_split = MIN_SPLIT_M / px
+
+    def rec(i0, i1):
+        q = pts[i0:i1 + 1]
+        if len(q) < 2:
+            return
+        a, b = q[0], q[-1]
+        d = b - a
+        L = float(np.linalg.norm(d))
+        if L > 1e-9:
+            n = np.array([-d[1], d[0]]) / L
+            dev = np.abs((q - a) @ n)
         else:
-            refined[region_mask] = 0
+            dev = np.linalg.norm(q - a, axis=1)
+        if dev.max() <= tol or L < 2 * min_split:
+            out.append({"kind": "line", "idx": (i0, i1)})
+            return
+        if len(q) >= 12 and L * px >= ARC_MIN_CHORD_M:
+            c, r, rms, emax = _circle(q)
+            sag = r - math.sqrt(max(r * r - (L / 2) ** 2, 0.0))
+            m_ = q.mean(0)
+            line_rms = float(np.linalg.svd(q - m_, compute_uv=False)[-1] / math.sqrt(len(q)))
+            if rms <= tol and emax <= 2.5 * tol and ARC_R[0] / px <= r <= ARC_R[1] / px and \
+                    sag * px >= ARC_MIN_SAG_M and line_rms >= 3 * rms:
+                out.append({"kind": "arc", "idx": (i0, i1), "c": c, "r": r})
+                return
+        k = int(dev.argmax())
+        if k in (0, len(q) - 1):
+            k = len(q) // 2
+        rec(i0, i0 + k)
+        rec(i0 + k, i1)
 
-    return refined
+    if len(pts) >= 2:
+        if np.linalg.norm(pts[0] - pts[-1]) < 2 and len(pts) > 4:      # кольцо: режем в дальней точке
+            k = int(np.linalg.norm(pts - pts[0], axis=1).argmax())
+            rec(0, k)
+            rec(k, len(pts) - 1)
+        else:
+            rec(0, len(pts) - 1)
+    return out
+
+
+def _arc_poly(c, r, a, b, mid, step):
+    a0 = math.atan2(a[1] - c[1], a[0] - c[0])
+    a1 = math.atan2(b[1] - c[1], b[0] - c[0])
+    am = math.atan2(mid[1] - c[1], mid[0] - c[0])
+    da = (a1 - a0 + math.pi) % (2 * math.pi) - math.pi
+    dm = (am - a0 + math.pi) % (2 * math.pi) - math.pi
+    if np.sign(dm) != np.sign(da) or abs(dm) > abs(da):
+        da -= np.sign(da) * 2 * math.pi
+    n = max(2, int(abs(da) * r / step))
+    t = a0 + da * np.linspace(0, 1, n + 1)
+    return np.c_[c[0] + r * np.cos(t), c[1] + r * np.sin(t)]
+
+
+def walls_from_mask(mask: np.ndarray, px: float, orient: np.ndarray | None = None) -> list[dict]:
+    """Маска конструкции -> стены в пикселях (j, i): {"pts", "t", "free", "arc"?}."""
+    import cv2
+
+    # край растра - фон (иначе маска во весь растр даёт бесконечные расстояния)
+    dt = cv2.distanceTransform(np.pad(mask.astype(np.uint8), 1), cv2.DIST_L2, 5)[1:-1, 1:-1]
+    sk = prune_spurs(unstair(thin(mask)), dt)
+    deg = _degree(sk)
+    items = []
+    for e in graph(sk):
+        pix = np.array(e["pix"])
+        if len(pix) < 2:
+            continue
+        xy = pix[:, ::-1].astype(float)                       # (j, i)
+        for seg in fit_chain(xy, px):
+            i0, i1 = seg["idx"]
+            q = xy[i0:i1 + 1]
+            qp = pix[i0:i1 + 1]
+            t = float(np.clip(2 * float(np.median(dt[qp[:, 0], qp[:, 1]])) - 1.0, 2.0, 1.0 / px))   # 4 см - 1 м
+            free = (bool(deg[tuple(qp[0])] == 1), bool(deg[tuple(qp[-1])] == 1))
+            if seg["kind"] == "arc":
+                items.append({"t": t, "free": free, "arc": {"c": seg["c"], "r": seg["r"]}, "fit": q})
+                continue
+            L = float(np.linalg.norm(q[-1] - q[0]))
+            if L * px < MIN_WALL_M and not any(free) and len(q) < 3:
+                continue
+            m = q.mean(0)
+            if len(q) >= 8 and L * px >= 0.6:                  # длинная - по точкам
+                _, _, vt = np.linalg.svd(q - m, full_matrices=False)
+                d = vt[0]
+            elif orient is not None:                          # короткая - по голове ориентации
+                o = orient[:, qp[:, 0], qp[:, 1]].mean(1)
+                th = math.atan2(o[1], o[0]) / 2
+                d = np.array([math.cos(th), -math.sin(th)])   # растр: строки вниз
+            else:
+                d = (q[-1] - q[0]) / max(L, 1e-9)
+            if (q[-1] - q[0]) @ d < 0:
+                d = -d
+            s = (q - m) @ d
+            if s.max() - s.min() < 1.0:                       # вырожденный кусок (точка)
+                continue
+            items.append({"pts": np.array([m + d * s.min(), m + d * s.max()]), "t": t, "free": free})
+    arcs = _merge_arcs([w for w in items if "arc" in w], px)
+    for w in arcs:
+        q = w.pop("fit")
+        w["pts"] = _arc_poly(w["arc"]["c"], w["arc"]["r"], q[0], q[-1], q[len(q) // 2], 0.1 / px)
+    return [w for w in items if "arc" not in w] + arcs
+
+
+def _merge_arcs(arcs: list, px: float) -> list:
+    """Соседние дуги одной окружности (ребро скелета разрезано стыком или шумом) - одна,
+    с переподгонкой по всем точкам."""
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(arcs)):
+            for j in range(i + 1, len(arcs)):
+                A, B = arcs[i], arcs[j]
+                ra, rb = A["arc"]["r"], B["arc"]["r"]
+                if abs(ra - rb) > 0.08 * max(ra, rb) or \
+                        np.linalg.norm(A["arc"]["c"] - B["arc"]["c"]) > 0.08 * max(ra, rb):
+                    continue
+                qa, qb = A["fit"], B["fit"]
+                ends = [(np.linalg.norm(qa[x] - qb[y]), x, y) for x in (0, -1) for y in (0, -1)]
+                d, x, y = min(ends)
+                if d > 0.3 / px:
+                    continue
+                qa = qa if x == -1 else qa[::-1]
+                qb = qb if y == 0 else qb[::-1]
+                q = np.vstack([qa, qb])
+                c, r, rms, _ = _circle(q)
+                if rms > 2 * TOL_PX:
+                    continue
+                L = (len(qa) * A["t"] + len(qb) * B["t"]) / len(q)
+                arcs[i] = {"t": L, "free": (A["free"][0 if x == -1 else 1], B["free"][1 if y == 0 else 0]),
+                           "arc": {"c": c, "r": r}, "fit": q}
+                arcs.pop(j)
+                changed = True
+                break
+            if changed:
+                break
+    return arcs
 
 
 # ----------------------------------------------------------------------
-# Rectangle decomposition → wall segments
+# Проёмы, помещения
 # ----------------------------------------------------------------------
 
-def rect_to_wall_segment(
-    rect: rd.Rect,
-    idx: int,
-    px_to_m: float,
-) -> WallSegment:
-    """Convert decomposed Rect to WallSegment with proper thickness."""
-    # Thickness = short side of rectangle
-    thickness_px = min(rect.w, rect.h)
-    thickness_m = round(thickness_px * px_to_m, 3)
+def _hysteresis(p: np.ndarray, hi: float = 0.5, lo: float = 0.3, min_px: int = 6):
+    import cv2
 
-    # Centerline endpoints
-    rad = math.radians(rect.angle)
-    cos, sin = math.cos(rad), math.sin(rad)
-    half_len = max(rect.w, rect.h) / 2.0
-    dx, dy = half_len * cos, half_len * sin
-
-    if rect.w < rect.h:  # vertical dominant → swap
-        dx, dy = -half_len * sin, half_len * cos
-
-    p1 = (rect.cx - dx, rect.cy - dy)
-    p2 = (rect.cx + dx, rect.cy + dy)
-
-    length_px = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
-    length_m = round(length_px * px_to_m, 2)
-
-    return WallSegment(
-        id=f"wall_{idx:03d}",
-        points=[list(p1), list(p2)],
-        thickness=thickness_m,
-        rooms=[],
-        is_outer=False,
-        length=length_m,
-    )
+    n, lab, st, _ = cv2.connectedComponentsWithStats((p > lo).astype(np.uint8), connectivity=8)
+    strong = np.bincount(lab[p > hi], minlength=n) > 0
+    return [lab == k for k in range(1, n) if strong[k] and st[k, cv2.CC_STAT_AREA] >= min_px]
 
 
-def merge_collinear_walls(
-    walls: list[WallSegment],
-    angle_tol: float = 5.0,
-    dist_tol_m: float = 0.15,
-    gap_tol_m: float = 0.20,
-    back_to_back_tol_m: float = 0.40,
-    max_bleed_for_merge: float = 0.30,
-) -> list[WallSegment]:
-    """
-    Merge nearby collinear wall segments, including back-to-back chains.
-
-    Two segments merge if:
-    - Angle difference < angle_tol
-    - Perpendicular distance < dist_tol_m
-    - Axial gap < gap_tol_m (for aligned walls) OR < back_to_back_tol_m (for back-to-back chains)
-
-    Back-to-back chains: adjacent parallel walls that should be merged if bleed is acceptable.
-    """
-    if len(walls) <= 1:
-        return walls
-
-    def angle_of(w: WallSegment) -> float:
-        p1, p2 = w.points[0], w.points[1]
-        return math.degrees(math.atan2(p2[1] - p1[1], p2[0] - p1[0])) % 180
-
-    def perp_dist(w1: WallSegment, w2: WallSegment) -> float:
-        p1, p2 = w1.points[0], w1.points[1]
-        q = w2.points[0]
-        dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-        L = math.hypot(dx, dy)
+def _project(w: dict, xy: np.ndarray):
+    """Точки -> (параметр вдоль оси, расстояние до оси) для ломаной стены."""
+    pts = w["pts"]
+    best_d = np.full(len(xy), np.inf)
+    best_s = np.zeros(len(xy))
+    acc = 0.0
+    for a, b in zip(pts[:-1], pts[1:]):
+        d = b - a
+        L = float(np.linalg.norm(d))
         if L < 1e-9:
-            return float('inf')
-        return abs(dy * (q[0] - p1[0]) - dx * (q[1] - p1[1])) / L
+            continue
+        t = np.clip((xy - a) @ d / (L * L), 0, 1)
+        dist = np.linalg.norm(xy - (a + t[:, None] * d), axis=1)
+        m = dist < best_d
+        best_d[m], best_s[m] = dist[m], acc + t[m] * L
+        acc += L
+    return best_s, best_d
 
-    def axial_gap(w1: WallSegment, w2: WallSegment) -> float:
-        # Project w2 endpoints onto w1 axis
-        p1, p2 = np.array(w1.points[0]), np.array(w1.points[1])
-        axis = p2 - p1
-        L = np.linalg.norm(axis)
-        if L < 1e-9:
-            return float('inf')
-        axis = axis / L
 
-        def proj(pt):
-            return np.dot(np.array(pt) - p1, axis)
+def _point_at(w: dict, s: float) -> np.ndarray:
+    pts = w["pts"]
+    acc = 0.0
+    for a, b in zip(pts[:-1], pts[1:]):
+        L = float(np.linalg.norm(b - a))
+        if s <= acc + L or b is pts[-1]:
+            return a + (b - a) * (min(max(s - acc, 0.0), L) / max(L, 1e-9))
+        acc += L
+    return pts[-1]
 
-        w1_min, w1_max = 0.0, L
-        w2_min = min(proj(w2.points[0]), proj(w2.points[1]))
-        w2_max = max(proj(w2.points[0]), proj(w2.points[1]))
 
-        if w2_max < w1_min:
-            return w1_min - w2_max
-        if w2_min > w1_max:
-            return w2_min - w1_max
-        return 0.0
-
-    def can_merge_with_bleed(w1: WallSegment, w2: WallSegment, gap: float) -> bool:
-        """Check if back-to-back walls can merge considering bleed."""
-        # For back-to-back walls: estimate bleed as ratio of gap to combined length
-        total_length = w1.length + w2.length
-        if total_length < 1e-9:
-            return False
-        bleed_ratio = gap / total_length
-        return bleed_ratio <= max_bleed_for_merge
-
+def openings(prob: np.ndarray, heights: np.ndarray | None, items: list, px: float, ceil_m: float) -> list[dict]:
+    out = []
+    for c, kind in OPEN_KIND.items():
+        for comp in _hysteresis(prob[c], min_px=max(6, int((0.25 / px) ** 2 / 4))):
+            ys, xs = np.nonzero(comp)
+            xy = np.c_[xs, ys].astype(float)
+            cen = xy.mean(0)
+            best = None
+            for k, w in enumerate(items):
+                _, dist = _project(w, cen[None])
+                if dist[0] <= w["t"] / 2 + 0.25 / px and (best is None or dist[0] < best[1]):
+                    best = (k, dist[0])
+            if best is None:
+                continue
+            w = items[best[0]]
+            s, _ = _project(w, xy)
+            s0, s1 = float(np.percentile(s, 2)), float(np.percentile(s, 98)) + 1.0
+            if (s1 - s0) * px < 0.3:
+                continue
+            o = {"kind": kind, "wall": best[0], "s": (s0, s1), "sill": None, "head": None}
+            if heights is not None:
+                h0 = float(np.median(heights[0][comp])) * ceil_m
+                h1 = float(np.median(heights[1][comp])) * ceil_m
+                o["sill"] = round(h0, 2) if kind == "window" else 0.0
+                o["head"] = round(h1, 2) if kind != "opening" else None
+            out.append(o)
+    # один проём, распавшийся на куски вдоль стены - один
+    out.sort(key=lambda o: (o["wall"], o["kind"], o["s"][0]))
     merged = []
-    used = set()
-
-    for i, w1 in enumerate(walls):
-        if i in used:
-            continue
-
-        group = [w1]
-        used.add(i)
-
-        for j, w2 in enumerate(walls):
-            if j <= i or j in used:
-                continue
-
-            a1, a2 = angle_of(w1), angle_of(w2)
-            angle_diff = min(abs(a1 - a2), 180 - abs(a1 - a2))
-
-            if angle_diff > angle_tol:
-                continue
-
-            pdist = perp_dist(w1, w2)
-            if pdist > dist_tol_m:
-                continue
-
-            gap = axial_gap(w1, w2)
-
-            # Standard merge for aligned walls with small gap
-            if gap <= gap_tol_m:
-                group.append(w2)
-                used.add(j)
-            # Back-to-back merge for slightly larger gaps if bleed is acceptable
-            elif gap <= back_to_back_tol_m and can_merge_with_bleed(w1, w2, gap):
-                group.append(w2)
-                used.add(j)
-
-        if len(group) == 1:
-            merged.append(w1)
+    for o in out:
+        p = merged[-1] if merged else None
+        if p and p["wall"] == o["wall"] and p["kind"] == o["kind"] and o["s"][0] <= p["s"][1] + 0.1 / px:
+            p["s"] = (p["s"][0], max(p["s"][1], o["s"][1]))
         else:
-            # Merge group: collect all points, fit line, extend to span
-            all_pts = []
-            for w in group:
-                all_pts.extend(w.points)
-            all_pts = np.array(all_pts)
-
-            mean = all_pts.mean(axis=0)
-            cov = np.cov(all_pts.T)
-            _, vecs = np.linalg.eigh(cov)
-            axis = vecs[:, 1]
-
-            proj = (all_pts - mean) @ axis
-            t_min, t_max = proj.min(), proj.max()
-
-            p1 = mean + t_min * axis
-            p2 = mean + t_max * axis
-
-            avg_thickness = sum(w.thickness for w in group) / len(group)
-            length = float(np.linalg.norm(p2 - p1))
-
-            merged.append(WallSegment(
-                id=group[0].id,
-                points=[p1.tolist(), p2.tolist()],
-                thickness=round(avg_thickness, 3),
-                rooms=[],
-                is_outer=False,
-                length=round(length, 2),
-            ))
-
+            merged.append(o)
     return merged
 
 
-def snap_wall_endpoints(
-    walls: list[WallSegment],
-    snap_threshold_m: float = 0.10,
-) -> list[WallSegment]:
-    """
-    Snap endpoints of walls that are close but not touching.
-    Helps close T-junctions and corners.
-    """
-    if len(walls) <= 1:
-        return walls
+def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float) -> list[np.ndarray]:
+    """Помещения -> контуры (j, i). Свободное = то, что сеть считает помещением, за вычетом
+    преграды (итоговые стены с толщиной + маска конструкции: стены закрывают дыры маски,
+    маска - несомкнутые углы стен). Затравки - свободное, сжатое на 20 см (сужения и щели уже
+    40 см рвутся, комнаты не сливаются); остальное свободное - к ближайшей затравке
+    геодезическим ростом."""
+    import cv2
 
-    endpoints = []
-    for i, w in enumerate(walls):
-        for end_idx in (0, -1):
-            endpoints.append((i, end_idx, np.array(w.points[end_idx])))
-
-    # For each endpoint, find nearest other endpoint
-    for i, end_i, pt_i in endpoints:
-        best_dist = snap_threshold_m
-        best_j, best_end_j = None, None
-
-        for j, end_j, pt_j in endpoints:
-            if i == j:
-                continue
-            dist = float(np.linalg.norm(pt_i - pt_j))
-            if dist < best_dist:
-                best_dist = dist
-                best_j, best_end_j = j, end_j
-
-        if best_j is not None:
-            # Snap to midpoint
-            pt_j = np.array(walls[best_j].points[best_end_j])
-            mid = (pt_i + pt_j) / 2.0
-            walls[i].points[end_i] = mid.tolist()
-            walls[best_j].points[best_end_j] = mid.tolist()
-
-    return walls
-
-
-# ----------------------------------------------------------------------
-# Opening extraction from semantic classes
-# ----------------------------------------------------------------------
-
-def extract_openings_from_semantic(
-    door_mask: np.ndarray,
-    window_mask: np.ndarray,
-    heights: np.ndarray,
-    walls: list[WallSegment],
-    frame: dict,
-    ceiling_z: float,
-    min_width_m: float = 0.40,
-    max_wall_dist_m: float = 0.50,
-    min_door_width_m: float = 0.60,    # Doors need larger minimum width
-    min_window_width_m: float = 0.50,  # Windows need reasonable minimum width
-) -> list[Opening]:
-    """
-    Extract openings from semantic door/window masks:
-    1. Find connected components in each mask
-    2. Compute bbox and associate with nearest wall
-    3. Extract sill/head from heights tensor
-    4. Apply type-specific minimum width requirements (barrier length)
-
-    Doors and windows count as walls initially and are reclassified as openings
-    on top of walls. They need sufficient barrier length (rectangle width) to be added.
-    """
-    px_m = frame["pixel_m"]
-    openings = []
-
-    def process_mask(mask: np.ndarray, opening_type: str):
-        # Type-specific minimum width (barrier length)
-        type_min_width = min_door_width_m if opening_type == "door" else min_window_width_m
-
-        n, labels, stats, centroids = cv2.connectedComponentsWithStats(
-            mask.astype(np.uint8), connectivity=8
-        )
-
-        for i in range(1, n):
-            area = stats[i, cv2.CC_STAT_AREA]
-            if area < 20:  # skip noise
-                continue
-
-            x1 = stats[i, cv2.CC_STAT_LEFT]
-            y1 = stats[i, cv2.CC_STAT_TOP]
-            x2 = x1 + stats[i, cv2.CC_STAT_WIDTH]
-            y2 = y1 + stats[i, cv2.CC_STAT_HEIGHT]
-
-            # Bbox in world coords
-            corners_px = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]])
-            corners_world = px_to_world(corners_px, frame)
-
-            # Width = min side of bbox (barrier length when opening becomes rectangle)
-            w_px = min(stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT])
-            width_m = w_px * px_m
-
-            # Apply type-specific minimum barrier length
-            if width_m < type_min_width:
-                continue
-
-            # Centroid in world coords
-            cx, cy = centroids[i]
-            centroid_world = px_to_world(np.array([[cx, cy]]), frame)[0]
-
-            # Find nearest wall
-            best_wall = None
-            best_dist = float('inf')
-
-            for wall in walls:
-                p1 = np.array(wall.points[0])
-                p2 = np.array(wall.points[1])
-                # Distance from centroid to wall centerline
-                v = p2 - p1
-                L = np.linalg.norm(v)
-                if L < 1e-9:
-                    continue
-                t = np.clip(np.dot(centroid_world - p1, v) / (L * L), 0, 1)
-                closest = p1 + t * v
-                dist = float(np.linalg.norm(centroid_world - closest))
-
-                if dist < best_dist:
-                    best_dist = dist
-                    best_wall = wall
-
-            if best_wall is None or best_dist > max_wall_dist_m:
-                continue
-
-            # Extract sill/head from heights tensor
-            blob = labels == i
-            h_blob = heights[:, blob]
-            if h_blob.shape[1] == 0:
-                sill, head = None, None
-            else:
-                sill = float(np.median(h_blob[0]) * ceiling_z) if opening_type == "window" else 0.0
-                head = float(np.median(h_blob[1]) * ceiling_z)
-
-            # Opening endpoints: project corners onto wall axis
-            p1 = np.array(best_wall.points[0])
-            p2 = np.array(best_wall.points[1])
-            axis = p2 - p1
-            L = np.linalg.norm(axis)
-            axis = axis / L
-
-            proj = [(pt - p1) @ axis for pt in corners_world]
-            t_min, t_max = min(proj), max(proj)
-
-            a = p1 + t_min * axis
-            b = p1 + t_max * axis
-
-            openings.append(Opening(
-                id=f"{opening_type}_{len(openings):03d}",
-                opening_type=opening_type,
-                wall_id=best_wall.id,
-                a=a.tolist(),
-                b=b.tolist(),
-                width=round(width_m, 2),
-                sill=round(sill, 2) if sill is not None else None,
-                head=round(head, 2) if head is not None else None,
-            ))
-
-    process_mask(door_mask, "door")
-    process_mask(window_mask, "window")
-
-    return openings
-
-
-# ----------------------------------------------------------------------
-# Room extraction
-# ----------------------------------------------------------------------
-
-def extract_rooms(
-    sem: np.ndarray,
-    wall_mask: np.ndarray,
-    frame: dict,
-    min_area_m2: float = 1.0,
-) -> list[Room]:
-    """
-    Extract rooms from interior (class 1) connected components.
-    """
-    px_m = frame["pixel_m"]
-    interior = (sem == 1).astype(np.uint8)
-
-    # Remove wall pixels from interior
-    interior &= ~wall_mask
-
-    n, labels, stats, centroids = cv2.connectedComponentsWithStats(interior, connectivity=4)
-
-    rooms = []
-    for i in range(1, n):
-        area_px = stats[i, cv2.CC_STAT_AREA]
-        area_m2 = area_px * px_m * px_m
-
-        if area_m2 < min_area_m2:
+    bar = mask.astype(np.uint8).copy()
+    for w in items:
+        cv2.polylines(bar, [np.round(w["pts"]).astype(np.int32)], False, 1, max(2, int(round(w["t"]))))
+    free = ((prob[list(INTERIOR)].sum(0) > 0.5) & (bar == 0)).astype(np.uint8)
+    r = max(1, int(round(0.2 / px)))
+    core = cv2.erode(free, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+    n, seeds = cv2.connectedComponents(core, connectivity=4)
+    area = np.bincount(seeds.ravel(), minlength=n)
+    keep = area * px * px >= 0.3
+    keep[0] = False
+    lab = np.where(keep[seeds], seeds, 0).astype(np.int32)
+    k3 = np.ones((3, 3), np.uint8)
+    for _ in range(3 * r):                                  # геодезический рост внутри свободного
+        grow = cv2.dilate(lab.astype(np.float32), k3).astype(np.int32)
+        tgt = (lab == 0) & (free > 0) & (grow > 0)
+        if not tgt.any():
+            break
+        lab[tgt] = grow[tgt]
+    out = []
+    for k in np.unique(lab):
+        if k == 0:
             continue
-
-        # Extract contour
-        room_mask = (labels == i).astype(np.uint8)
-        contours, _ = cv2.findContours(room_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        if not contours:
+        m = (lab == k).astype(np.uint8)
+        if m.sum() * px * px < MIN_ROOM_M2:
             continue
+        m = cv2.dilate(m, k3, iterations=max(1, int(round(0.03 / px))))        # до грани стены
+        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        c = max(cnts, key=cv2.contourArea)
+        poly = cv2.approxPolyDP(c, max(1.0, 0.02 / px), True)[:, 0, :].astype(float)
+        if len(poly) >= 3:
+            out.append(poly)
+    return out
 
-        contour = max(contours, key=cv2.contourArea)
-        contour = contour.squeeze()
 
-        if contour.ndim != 2 or len(contour) < 3:
-            continue
-
-        # Convert to world coords
-        contour_world = px_to_world(contour, frame)
-
-        # Simplify
-        perimeter = float(cv2.arcLength(contour, True)) * px_m
-        simplified = cv2.approxPolyDP(contour_world.astype(np.float32), 0.05, True)
-        simplified = simplified.squeeze()
-
-        if simplified.ndim != 2:
-            simplified = contour_world
-
-        # Label position
-        cx, cy = centroids[i]
-        label_world = px_to_world(np.array([[cx, cy]]), frame)[0]
-
-        rooms.append(Room(
-            id=f"room_{i:03d}",
-            name=f"Room {i}",
-            points=simplified.tolist(),
-            area=round(area_m2, 2),
-            perimeter=round(perimeter, 2),
-            label_xy=(round(label_world[0], 2), round(label_world[1], 2)),
-            is_enclosed=True,
-        ))
-
-    return rooms
+def is_outer(prob: np.ndarray, w: dict, px: float) -> bool:
+    """За одной из граней (на 15 см) - улица."""
+    H, W = prob.shape[1:]
+    a, b = w["pts"][0], w["pts"][-1]
+    d = (b - a) / max(np.linalg.norm(b - a), 1e-9)
+    n = np.array([-d[1], d[0]])
+    sides = []
+    for sg in (1, -1):
+        q = np.array([w["pts"][k] for k in range(len(w["pts"]))]).mean(0) + sg * n * (w["t"] / 2 + 0.15 / px)
+        j, i = int(np.clip(round(q[0]), 0, W - 1)), int(np.clip(round(q[1]), 0, H - 1))
+        sides.append(prob[0, i, j])
+    return max(sides) > 0.5
 
 
 # ----------------------------------------------------------------------
-# Main vectorization
+# Уровень
 # ----------------------------------------------------------------------
 
-def vectorize(pred_dir: Path, log=print) -> VectorPlan:
-    """
-    Vectorize neural network predictions into a structured floor plan.
+def _load(pred_dir: Path):
+    import cv2
 
-    Reads:
-        - sem.png: semantic segmentation (class 0-7)
-        - dist.npy: distance to wall face (normalized [0,1])
-        - heights.npy: sill/head heights (normalized [0,1])
-        - scene.json: frame metadata (origin, pixel_m, ceiling_z)
+    if (pred_dir / "prob.npz").exists():
+        prob = np.load(pred_dir / "prob.npz")["prob"].astype(np.float32)
+    else:                                                  # только классы - вероятности 0/1
+        sem = cv2.imread(str(pred_dir / "sem.png"), cv2.IMREAD_UNCHANGED)
+        prob = np.stack([(sem == k).astype(np.float32) for k in range(8)])
+    opt = {k: np.load(pred_dir / f"{k}.npy").astype(np.float32) for k in ("orient", "heights")
+           if (pred_dir / f"{k}.npy").exists()}
+    scene = json.loads((pred_dir / "scene.json").read_text(encoding="utf-8"))
+    return prob, opt.get("orient"), opt.get("heights"), scene
 
-    Classes (simscan/netinput.py CLASSES):
-        0: outside, 1: interior, 2: wall, 3: door, 4: window, 5: opening, 6: clutter, 7: void
-    """
-    pred_dir = Path(pred_dir)
 
-    # Load inputs
-    sem = np.array(Image.open(pred_dir / "sem.png"))
-    dist = np.load(pred_dir / "dist.npy").astype(np.float32)
-    heights = np.load(pred_dir / "heights.npy").astype(np.float32)
-    scene = json.loads((pred_dir / "scene.json").read_text())
+def vectorize(pred_dir, log=print) -> dict:
+    """Каталог уровня из infer -> план (словарь в формате export-ifc, мировые метры)."""
+    prob, orient, heights, scene = _load(Path(pred_dir))
+    return vectorize_arrays(prob, orient, heights, scene, log=log)
 
-    frame = scene["frame"]
-    px_m = frame["pixel_m"]
-    ceiling_z = scene.get("ceiling_z", 3.0)
-    level = scene.get("level", "L1")
-    floor_z = scene.get("floor_z", 0.0)
 
-    H, W = sem.shape
-    log(f"Vectorizing {level}: {H}x{W} px @ {px_m*100:.1f} cm/px")
+def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.ndarray | None, scene: dict,
+                     log=print) -> dict:
+    """Выход сети (prob [8,H,W], orient [2,H,W], heights [2,H,W]) и scene.json уровня -> план."""
+    prob = np.asarray(prob, np.float32)
+    M = np.asarray(scene["pixel_to_world"], float)
+    px = float(abs(M[0, 0]))
+    floor_z = float(scene.get("floor_z", 0.0))
+    ceil_z = float(scene.get("ceiling_z", floor_z + 2.7))
+    ceil_m = ceil_z - floor_z if 1.5 < ceil_z - floor_z < 10 else 2.7
+    P = lambda m: m / px                                     # noqa: E731
 
-    # Extract masks
-    wall_mask = (sem == 2)
-    door_mask = (sem == 3)
-    window_mask = (sem == 4)
+    mask = struct_mask(prob, px)
+    items = walls_from_mask(mask, px, orient)
+    n0 = len(items)
+    p_struct = prob[list(STRUCT)].sum(0)
 
-    log(f"  Wall pixels: {int(wall_mask.sum())} ({100*wall_mask.mean():.2f}%)")
-    log(f"  Door pixels: {int(door_mask.sum())}")
-    log(f"  Window pixels: {int(window_mask.sum())}")
+    def bridge_ok(a, b):
+        """В щели между соосными кусками сеть хоть немного видит конструкцию."""
+        n = max(2, int(np.linalg.norm(b - a)))
+        q = np.round(a + (b - a) * np.linspace(0, 1, n)[:, None]).astype(int)
+        q[:, 0] = np.clip(q[:, 0], 0, p_struct.shape[1] - 1)
+        q[:, 1] = np.clip(q[:, 1], 0, p_struct.shape[0] - 1)
+        return float(p_struct[q[:, 1], q[:, 0]].mean()) >= 0.12
 
-    # Preprocess wall mask
-    wall_clean = preprocess_wall_mask(
-        wall_mask.astype(np.uint8) * 255,
-        door_mask.astype(np.uint8) * 255,
-        window_mask.astype(np.uint8) * 255,
-        min_area_px=50,
-        morph_close_kernel=3,
-    )
+    def merge(gap):
+        # разрыв на линии стены - почти всегда пропуск сети: проход без двери - класс «проём»,
+        # он в конструкции; поэтому соосные куски сливаются через зазор до GAP_M, а до
+        # GAP_MAX_M - если в щели сеть хоть немного видит конструкцию
+        return merge_collinear(items, P, gap_m=gap, keep_outer_apart=False, gap_max_m=GAP_MAX_M, bridge_ok=bridge_ok)
 
-    log(f"  Wall after preprocessing: {int(wall_clean.sum())} px")
+    regularize(items, P=P)
+    items = merge(GAP_M)
+    join(items, P, free_reach_m=GAP_M)
+    regularize(items, P=P)
+    items = merge(0.05)
+    items = [w for w in items if np.linalg.norm(w["pts"][-1] - w["pts"][0]) * px >= MIN_WALL_M or w.get("arc")]
+    items = tidy(items, P, reach_m=GAP_M)
+    items = merge(0.05)                                     # стыки после чистки - соосные куски впритык
+    ops = openings(prob, heights, items, px, ceil_m)
+    room_polys = rooms(prob, items, mask, px)
 
-    # Rect decomposition with adaptive bleed weights
-    # Higher bleed weight for large walls (strict containment)
-    # Lower bleed weight for small walls (more permissive)
-    log("  Running rect decomposition...")
-    rects = rd.decompose(
-        wall_clean,
-        angle_steps=24,
-        rect_penalty=0.0,
-        max_grid_dim=200,
-        coverage_stop=0.85,  # Lower threshold: don't need to cover every pixel
-        bleed_weight=3.0,     # Base penalty (for small walls) - reduced from 8.0
-        initial_bleed_weight=15.0,  # High penalty for large walls (strict containment)
-        bleed_decay=0.5,      # Gradual decay: large walls stay strict, small walls become permissive
-        axis_only=False,  # Allow diagonals
-        axis_gap=5.0,     # Prefer 0/45/90/135 but allow others
-        max_overlap=1.0,
-        max_spill_fraction=0.25,  # Allow more spill for slightly misaligned walls
-        refine=True,
-        verbose=False,
-        thin_rescue=True,
-        thin_rescue_max_thickness=20.0,
-        thin_rescue_min_len=25.0,
-        max_rects=400,
-    )
+    def to_w(xy):
+        xy = np.atleast_2d(xy)
+        return (M @ np.c_[xy, np.ones(len(xy))].T).T
 
-    log(f"  Decomposed into {len(rects)} rectangles")
-
-    # Convert rects to wall segments
-    walls = [rect_to_wall_segment(r, i, px_m) for i, r in enumerate(rects)]
-
-    # Filter short walls
-    walls = [w for w in walls if w.length >= 0.30]
-    log(f"  Walls after length filter (≥0.30m): {len(walls)}")
-
-    # Filter walls that overlap with windows (exterior walls mistaken as interior)
-    if window_mask.any():
-        walls_filtered = []
-        window_dilated = cv2.dilate(window_mask.astype(np.uint8), np.ones((5, 5), np.uint8), iterations=2)
-
-        for wall in walls:
-            # Sample points along wall centerline
-            p1 = np.array(wall.points[0])
-            p2 = np.array(wall.points[1])
-            n_samples = max(3, int(np.linalg.norm(p2 - p1) / (px_m * 5)))
-            samples_world = np.linspace(p1, p2, n_samples)
-            samples_px = world_to_px(samples_world, frame).astype(int)
-
-            # Check if samples overlap with dilated window mask
-            overlap_count = 0
-            for j, i in samples_px:
-                if 0 <= i < H and 0 <= j < W:
-                    if window_dilated[i, j]:
-                        overlap_count += 1
-
-            # Keep wall only if < 50% of samples overlap with windows
-            if overlap_count / n_samples < 0.5:
-                walls_filtered.append(wall)
-
-        if len(walls_filtered) < len(walls):
-            log(f"  Filtered {len(walls) - len(walls_filtered)} walls overlapping windows")
-            walls = walls_filtered
-
-    # Merge collinear segments including back-to-back chains
-    walls = merge_collinear_walls(
-        walls,
-        angle_tol=5.0,
-        dist_tol_m=0.15,
-        gap_tol_m=0.20,            # Standard gap tolerance for aligned walls
-        back_to_back_tol_m=0.40,   # Larger tolerance for back-to-back chains
-        max_bleed_for_merge=0.30,  # Accept up to 30% bleed ratio for merging chains
-    )
-    log(f"  Walls after merging: {len(walls)}")
-
-    # Snap endpoints
-    walls = snap_wall_endpoints(walls, snap_threshold_m=0.10)
-
-    # Transform to world coords
-    for wall in walls:
-        pts_px = np.array(wall.points)
-        pts_world = px_to_world(pts_px, frame)
-        wall.points = [[round(x, 2), round(y, 2)] for x, y in pts_world]
-        wall.length = round(float(np.linalg.norm(pts_world[1] - pts_world[0])), 2)
-
-    log(f"  Final walls: {len(walls)}")
-
-    # Extract openings with type-specific minimum barrier lengths
-    log("  Extracting openings...")
-    openings = extract_openings_from_semantic(
-        door_mask.astype(np.uint8),
-        window_mask.astype(np.uint8),
-        heights,
-        walls,
-        frame,
-        ceiling_z,
-        min_width_m=0.40,         # Legacy fallback
-        max_wall_dist_m=0.50,
-        min_door_width_m=0.60,    # Doors need 60cm+ barrier length to be added
-        min_window_width_m=0.50,  # Windows need 50cm+ barrier length to be added
-    )
-
-    log(f"  Openings: {len(openings)} ({sum(1 for o in openings if o.opening_type=='door')} doors, "
-        f"{sum(1 for o in openings if o.opening_type=='window')} windows)")
-
-    # Extract rooms
-    log("  Extracting rooms...")
-    rooms = extract_rooms(sem, wall_mask.astype(np.uint8), frame, min_area_m2=1.0)
-    log(f"  Rooms: {len(rooms)}")
-
-    return VectorPlan(
-        level=level,
-        floor_z=floor_z,
-        ceiling_z=ceiling_z,
-        walls=walls,
-        openings=openings,
-        rooms=rooms,
-        frame=frame,
-        metadata={
-            "method": "rect_decompose",
-            "n_rects": len(rects),
-            "wall_px": int(wall_mask.sum()),
-            "wall_clean_px": int(wall_clean.sum()),
-        },
-    )
+    lvl = str(scene.get("level", "L1"))
+    walls_out = []
+    for k, w in enumerate(items):
+        pts = to_w(w["pts"])
+        rec = {"id": f"{lvl}-W{k + 1}", "points": pts.round(3).tolist(), "thickness": round(w["t"] * px, 3),
+               "is_outer": bool(is_outer(prob, w, px)), "rooms": [],
+               "length": round(float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum()), 3)}
+        if w.get("arc"):
+            rec["arc"] = {"center": to_w(w["arc"]["c"])[0].round(3).tolist(), "radius": round(w["arc"]["r"] * px, 3)}
+        walls_out.append(rec)
+    ops_out = []
+    for k, o in enumerate(ops):
+        w = items[o["wall"]]
+        a, b = to_w(np.array([_point_at(w, o["s"][0]), _point_at(w, o["s"][1])]))
+        ops_out.append({"id": f"{lvl}-O{k + 1}", "opening_type": o["kind"], "wall_id": walls_out[o["wall"]]["id"],
+                        "a": a.round(3).tolist(), "b": b.round(3).tolist(),
+                        "width": round(float(np.linalg.norm(b - a)), 3), "sill": o["sill"], "head": o["head"]})
+    rooms_out = []
+    for k, poly in enumerate(room_polys):
+        q = to_w(poly)
+        area = 0.5 * abs(float(q[:, 0] @ np.roll(q[:, 1], -1) - q[:, 1] @ np.roll(q[:, 0], -1)))
+        per = float(np.linalg.norm(q - np.roll(q, -1, 0), axis=1).sum())
+        rooms_out.append({"id": f"{lvl}-R{k + 1}", "name": f"Помещение {k + 1}", "points": q.round(3).tolist(),
+                          "area": round(area, 2), "perimeter": round(per, 2)})
+    log(f"{lvl}: стен {len(walls_out)} (кусков скелета {n0}), дуг {sum('arc' in w for w in walls_out)}, "
+        f"проёмов {len(ops_out)}, помещений {len(rooms_out)}")
+    frame = dict(scene.get("frame") or {})
+    frame.setdefault("width", prob.shape[2])
+    frame.setdefault("height", prob.shape[1])
+    return {"level": lvl, "floor_z": floor_z, "ceiling_z": ceil_z, "walls": walls_out, "openings": ops_out,
+            "rooms": rooms_out, "frame": frame, "pixel_to_world": M.tolist(),
+            "metadata": {"method": "skeleton-graph", "pixel_m": px}}
 
 
 # ----------------------------------------------------------------------
-# Save utilities
+# Запись
 # ----------------------------------------------------------------------
 
-def save_json(plan: VectorPlan, path: Path):
-    """Save plan as JSON."""
-    data = asdict(plan)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+def save_json(plan: dict, path) -> None:
+    Path(path).write_text(json.dumps(plan, indent=1, ensure_ascii=False), encoding="utf-8")
 
 
-def save_svg(plan: VectorPlan, path: Path):
-    """Save plan as SVG."""
-    from xml.etree import ElementTree as ET
+def _draw(plan: dict, path, svg: bool) -> None:
+    import matplotlib
 
-    # Compute bounds
-    all_pts = []
-    for w in plan.walls:
-        all_pts.extend(w.points)
-    for r in plan.rooms:
-        all_pts.extend(r.points)
-
-    if not all_pts:
-        path.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
-        return
-
-    all_pts = np.array(all_pts)
-    x_min, y_min = all_pts.min(axis=0)
-    x_max, y_max = all_pts.max(axis=0)
-
-    margin = 1.0
-    x_min -= margin
-    y_min -= margin
-    x_max += margin
-    y_max += margin
-
-    width = x_max - x_min
-    height = y_max - y_min
-
-    svg = ET.Element("svg", xmlns="http://www.w3.org/2000/svg",
-                     width=str(int(width * 100)), height=str(int(height * 100)),
-                     viewBox=f"{x_min} {y_min} {width} {height}")
-
-    # Flip Y for SVG (Y grows down)
-    g = ET.SubElement(svg, "g", transform=f"scale(1,-1) translate(0,{-(y_min+y_max)})")
-
-    # Draw rooms
-    for room in plan.rooms:
-        pts_str = " ".join(f"{x},{y}" for x, y in room.points)
-        ET.SubElement(g, "polygon", points=pts_str, fill="#f0f0f0", stroke="#ccc", **{"stroke-width": "0.01"})
-
-    # Draw walls
-    for wall in plan.walls:
-        x1, y1 = wall.points[0]
-        x2, y2 = wall.points[1]
-        ET.SubElement(g, "line", x1=str(x1), y1=str(y1), x2=str(x2), y2=str(y2),
-                      stroke="#333", **{"stroke-width": str(wall.thickness)})
-
-    # Draw openings
-    for opening in plan.openings:
-        x1, y1 = opening.a
-        x2, y2 = opening.b
-        color = "#e74c3c" if opening.opening_type == "door" else "#3498db"
-        ET.SubElement(g, "line", x1=str(x1), y1=str(y1), x2=str(x2), y2=str(y2),
-                      stroke=color, **{"stroke-width": "0.05"})
-
-    path.write_text(ET.tostring(svg, encoding="unicode"), encoding="utf-8")
-
-
-def save_png(plan: VectorPlan, path: Path, dpi: int = 100):
-    """Save plan as PNG."""
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Polygon as MplPolygon
+    from matplotlib.patches import Polygon
 
-    fig, ax = plt.subplots(figsize=(12, 12), dpi=dpi)
-    ax.set_aspect('equal')
-    ax.axis('off')
-    fig.patch.set_facecolor('#f5f5f5')
-
-    # Draw rooms
-    for room in plan.rooms:
-        poly = MplPolygon(room.points, closed=True, facecolor='#f0f0f0', edgecolor='#ccc', linewidth=0.5)
-        ax.add_patch(poly)
-
-    # Draw walls
-    for wall in plan.walls:
-        p1, p2 = wall.points
-        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], 'k-', linewidth=wall.thickness * 100, solid_capstyle='butt')
-
-    # Draw openings
-    for opening in plan.openings:
-        a, b = opening.a, opening.b
-        color = '#e74c3c' if opening.opening_type == "door" else '#3498db'
-        ax.plot([a[0], b[0]], [a[1], b[1]], color=color, linewidth=2, solid_capstyle='butt')
-
-    # Set bounds
-    all_pts = [p for w in plan.walls for p in w.points]
-    if all_pts:
-        all_pts = np.array(all_pts)
-        m = 1.0
-        ax.set_xlim(all_pts[:, 0].min() - m, all_pts[:, 0].max() + m)
-        ax.set_ylim(all_pts[:, 1].min() - m, all_pts[:, 1].max() + m)
-
-    plt.tight_layout()
-    plt.savefig(path, dpi=dpi, bbox_inches='tight', facecolor='#f5f5f5')
-    plt.close()
+    fig, ax = plt.subplots(figsize=(10, 10))
+    for r in plan["rooms"]:
+        ax.add_patch(Polygon(r["points"], closed=True, fc="#e8f1fa", ec="none"))
+        c = np.mean(r["points"], axis=0)
+        ax.text(c[0], c[1], f"{r['area']:.1f} м²", ha="center", va="center", fontsize=7, color="#555")
+    for w in plan["walls"]:
+        p = np.asarray(w["points"])
+        lw = max(1.0, w["thickness"] * 72 / 0.0254 / 100 * 0.35)
+        ax.plot(p[:, 0], p[:, 1], color="#c04040" if w["is_outer"] else "#303030", lw=lw, solid_capstyle="butt")
+    col = {"door": "#d6604d", "window": "#4393c3", "opening": "#f4a582"}
+    for o in plan["openings"]:
+        a, b = np.asarray(o["a"]), np.asarray(o["b"])
+        ax.plot([a[0], b[0]], [a[1], b[1]], color=col.get(o["opening_type"], "k"), lw=4, solid_capstyle="butt")
+    ax.set_aspect("equal")
+    ax.axis("off")
+    ax.set_title(f"{plan['level']}: стен {len(plan['walls'])}, проёмов {len(plan['openings'])}, "
+                 f"помещений {len(plan['rooms'])}", fontsize=10)
+    fig.savefig(path, dpi=110, bbox_inches="tight", format="svg" if svg else "png")
+    plt.close(fig)
 
 
-def main_vectorize(pred_dir, out_dir, log=print):
-    """Vectorize one level."""
-    pred_dir = Path(pred_dir)
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+def save_png(plan: dict, path) -> None:
+    _draw(plan, path, False)
 
+
+def save_svg(plan: dict, path) -> None:
+    _draw(plan, path, True)
+
+
+def main_vectorize(pred_dir, out_dir, log=print) -> dict:
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
     plan = vectorize(pred_dir, log=log)
-
-    save_json(plan, out_dir / "plan.json")
-    log(f"Saved: {out_dir / 'plan.json'}")
-
-    save_svg(plan, out_dir / "plan.svg")
-    log(f"Saved: {out_dir / 'plan.svg'}")
-
-    save_png(plan, out_dir / "plan.png")
-    log(f"Saved: {out_dir / 'plan.png'}")
-
+    save_json(plan, out / "plan.json")
+    save_svg(plan, out / "plan.svg")
+    save_png(plan, out / "plan.png")
+    log(f"записано: {out / 'plan.json'}, plan.svg, plan.png")
     return plan

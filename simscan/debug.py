@@ -71,6 +71,7 @@ def _diverging():
 def _rebuild(scene_dir: Path):
     from .config import load_config
     from .layout import Layout
+    from . import realism
     from .realism import apply_to_mesh
     from .scanner import ScanSimulator, Station
     from .scene import build_scene
@@ -79,7 +80,7 @@ def _rebuild(scene_dir: Path):
     cfg = load_config(overrides=doc["meta"]["config"])
     lay = Layout.from_dict(doc)
     real = doc["meta"].get("realism", {"enabled": False})
-    mesh, solids = build_scene(lay, real.get("tessellation_m") if real.get("enabled") else None)
+    mesh, solids = build_scene(lay, realism.tessellation(real))
     apply_to_mesh(mesh, real)
     params = doc["meta"]["effects_sampled"]
     # станция для отладки - в жилой комнате или кухне с наибольшим числом предметов
@@ -180,9 +181,10 @@ def panorama(scan, out: Path) -> dict:
 def edge_closeup(lay, station, scan_off, scan_on, out: Path, solids=None) -> dict:
     """Горизонтальный срез у проёма двери, ближайшей к станции: что даёт модель пятна."""
     plt = _plt()
-    from .groundtruth import _box_corners, layout_warp
+    from .groundtruth import _box_corners
+    from .planwarp import layout_warp
     A = layout_warp(lay)
-    W = (lambda p: p) if A is None else (lambda p: np.asarray(p) @ A.T)
+    W = (lambda p: p) if A is None else A.poly
     pos = np.asarray(station.position[:2])
     p_on = _to_layout(scan_on, station)
     m = scan_on.valid & scan_on.mixed & (p_on[:, 2] > 0.3) & (p_on[:, 2] < 2.0)
