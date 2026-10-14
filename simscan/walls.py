@@ -139,10 +139,12 @@ def merge_collinear(items: list, P, gap_m: float = 0.3, off_m: float = 0.04, sin
     return [x for x, ok in zip(items, alive) if ok]
 
 
-def join(items: list, P, tol_m: float = 0.05, free_reach_m: float = 0.4) -> None:
+def join(items: list, P, tol_m: float = 0.05, free_reach_m: float = 0.4, bridge_ok=None) -> None:
     """Конец прямой стены у оси другой стены (не параллельной; прямой или любого участка дуги)
     продлевается до пересечения осей: дотягивается на свою и чужую толщину (+ tol_m), а
-    свободный конец (w["free"][e]) - до free_reach_m."""
+    свободный конец (w["free"][e]) - до free_reach_m. Если пересечение - за концом другой
+    (прямой) стены, она тоже доходит до угла: зазор не больше толщины или bridge_ok(a, b)
+    (в зазоре видна конструкция) - иначе угол остался бы открытым."""
     segs = []                                                    # (стена, a, b, концы ломаной)
     for w in items:
         pts = w["pts"]
@@ -155,7 +157,7 @@ def join(items: list, P, tol_m: float = 0.05, free_reach_m: float = 0.4) -> None
             p, q = A["pts"][e], A["pts"][1 - e]
             u = _unit(p - q)
             L_a = float(np.linalg.norm(p - q))
-            best = None
+            best, other = None, None
             for B, b0, b1, first, last in segs:
                 if B is A:
                     continue
@@ -180,8 +182,16 @@ def join(items: list, P, tol_m: float = 0.05, free_reach_m: float = 0.4) -> None
                     continue
                 if best is None or abs(s_a) < abs(best):
                     best = s_a
+                    other = (B, -1 if s_b < 0 and first else 1 if s_b > Lb and last else 0, b0, b1)
             if best is not None:
                 A["pts"][e] = p + u * best
+                B, side, b0, b1 = other
+                if side and _is_line(B):
+                    x = A["pts"][e]
+                    end = 0 if side < 0 else -1
+                    gap = float(np.linalg.norm(x - B["pts"][end]))
+                    if gap <= max(A["t"], B["t"]) + P(tol_m) or (bridge_ok is not None and bridge_ok(B["pts"][end], x)):
+                        B["pts"][end] = x.copy()
 
 
 def _dist_to_wall(p: np.ndarray, w: dict) -> float:
@@ -245,31 +255,29 @@ def _bevel(A: dict, items: list, P, max_m: float = 0.5) -> bool:
     if L >= P(max_m):
         return False
     nb = []
-    for p in (a, b):
-        best = None
-        for B in items:
-            if B is A or not _is_line(B):
-                continue
-            d = _dist_to_wall(p, B)
-            if d <= (A["t"] + B["t"]) / 2 + P(0.05) and (best is None or d < best[0]):
-                best = (d, B)
-        if best is None:
+    for p in (a, b):                                        # у конца может быть несколько стен (стык)
+        near = [B for B in items if B is not A and _is_line(B)
+                and _dist_to_wall(p, B) <= (A["t"] + B["t"]) / 2 + P(0.05)]
+        if not near:
             return False
-        nb.append(best[1])
-    B, C = nb
-    if B is C:
-        return False
-    u, v = _unit(B["pts"][1] - B["pts"][0]), _unit(C["pts"][1] - C["pts"][0])
-    den = u[0] * v[1] - u[1] * v[0]
-    if abs(den) < 0.3:                                      # параллельные - ниша
-        return False
-    r = C["pts"][0] - B["pts"][0]
-    x = B["pts"][0] + u * (r[0] * v[1] - r[1] * v[0]) / den
-    return float(np.linalg.norm(x - (a + b) / 2)) <= L
+        nb.append(near)
+    for B in nb[0]:
+        for C in nb[1]:
+            if B is C:
+                continue
+            u, v = _unit(B["pts"][1] - B["pts"][0]), _unit(C["pts"][1] - C["pts"][0])
+            den = u[0] * v[1] - u[1] * v[0]
+            if abs(den) < 0.3:                              # параллельные - ниша
+                continue
+            r = C["pts"][0] - B["pts"][0]
+            x = B["pts"][0] + u * (r[0] * v[1] - r[1] * v[0]) / den
+            if float(np.linalg.norm(x - (a + b) / 2)) <= L:
+                return True
+    return False
 
 
 def tidy(items: list, P, reach_m: float = 0.5, min_alone_m: float = 1.0, min_stub_m: float = 0.5,
-         max_bridge_m: float = 0.25, rounds: int = 3) -> list:
+         max_bridge_m: float = 0.25, rounds: int = 3, bridge_ok=None) -> list:
     """Чистка после сборки: висящий конец ещё раз тянется к соседней стене (до reach_m);
     вон - одиночная стена (оба конца ни во что не упираются) короче min_alone_m (шум),
     огрызок с висящим концом короче min_stub_m, перемычка короче max_bridge_m между двумя
@@ -282,7 +290,7 @@ def tidy(items: list, P, reach_m: float = 0.5, min_alone_m: float = 1.0, min_stu
         con = connected_ends(items, P)
         for w, c in zip(items, con):
             w["free"] = (not c[0], not c[1])
-        join(items, P, free_reach_m=reach_m)
+        join(items, P, free_reach_m=reach_m, bridge_ok=bridge_ok)
         con = connected_ends(items, P)
         keep = []
         for w, c in zip(items, con):
