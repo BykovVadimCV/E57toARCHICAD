@@ -375,6 +375,7 @@ def _err_rgb(sem, pred):
 
 
 VEC_KEYS = ("axis_recall", "axis_precision", "axis_f1", "angle_err_deg_median", "thickness_err_cm_median",
+            "axis_err_cm_median", "axis_err_cm_p90",
             "pieces_per_gt_wall", "axis_offset_cm_p90", "dangling_ends_per_gt_wall", "standalone_walls",
             "openings_f1", "opening_width_err_cm", "room_iou_mean")
 
@@ -793,7 +794,8 @@ def vector_metrics(plan: dict, gt_vec: dict, tol: float = VEC_TOL_M) -> dict:
     """plan.json (vectorize / cellplan, мировая СК) против vector.json датасета.
 
     стены: полнота / точность осей с допуском tol (оси эталона - как учится сеть, см.
-           label_walls), ошибка направления (°) и толщины (см) на совпавших участках, число
+           label_walls), ошибка положения оси (см), направления (°) и толщины (см) на
+           совпавших участках, число
            стен на стену эталона (дробление);
     проёмы: центр ближе OPEN_MATCH_M и тот же тип - найден; ошибка ширины;
     помещения: IoU с лучшим совпавшим, лишние."""
@@ -825,7 +827,10 @@ def vector_metrics(plan: dict, gt_vec: dict, tol: float = VEC_TOL_M) -> dict:
         _, i_t = _seg_dist(gp[hit], gseg)
         terr = np.abs(pseg_t[i_g[hit]] - gseg_t[i_t]) * 100
         res.update({"angle_err_deg_median": _r(np.median(ang), 2), "angle_err_deg_p90": _r(np.percentile(ang, 90), 2),
-                    "thickness_err_cm_median": _r(np.median(terr), 1)})
+                    "thickness_err_cm_median": _r(np.median(terr), 1),
+                    # положение оси: расстояние от оси эталона до ближайшей оси плана на совпавших участках
+                    "axis_err_cm_median": _r(np.median(d_g[hit]) * 100, 2),
+                    "axis_err_cm_p90": _r(np.percentile(d_g[hit], 90) * 100, 2)})
     res["axis_f1"] = _r(_f1(res["axis_recall"] or 0, res["axis_precision"] or 0))
     res.update(_structure_quality(gw, pw, owner_g, d_g, i_g, pseg, tol))
     # проёмы
