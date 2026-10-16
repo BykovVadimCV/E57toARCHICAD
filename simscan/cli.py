@@ -99,7 +99,8 @@ def main(argv: list[str] | None = None) -> None:
     inf.add_argument("--tile", type=int, default=512)
     inf.add_argument("--tta", nargs="?", const="flip", default="none", choices=["none", "flip", "d4"],
                      help="Test-Time Augmentation: flip - 4 отражения (по умолчанию для --tta), d4 - 8 вариантов")
-    inf.add_argument("--plan", action="store_true", help="сразу векторный план уровня (plan.json, simscan/vectorize.py)")
+    inf.add_argument("--plan", action="store_true",
+                     help="сразу векторный план уровня (plan.json, simscan/vectorize.py); для E57 - привязанный к облаку")
     inf.add_argument("--batch", type=int, default=4, help="окон за проход сети")
     ev = sub.add_parser("evaluate", help="подробная оценка сети на val/test: report.json, levels.csv, графики")
     ev.add_argument("ckpt", help="best.pt")
@@ -183,6 +184,10 @@ def main(argv: list[str] | None = None) -> None:
     vec = sub.add_parser("vectorize", help="векторизация предсказаний сети в векторный план")
     vec.add_argument("pred_dir", help="каталог предсказаний (из infer): sem.png, dist.npy, ...")
     vec.add_argument("--out", required=True, help="каталог для векторного плана")
+    sn = sub.add_parser("snap", help="привязка векторного плана к облаку E57 (грани стен - по точкам)")
+    sn.add_argument("plan_json", nargs="+", help="plan.json уровней одного E57 (из vectorize / infer --plan)")
+    sn.add_argument("--e57", required=True, help="исходный E57")
+    sn.add_argument("--out", help="куда записать (один план); по умолчанию - на место, исходный - plan_net.json")
     exp = sub.add_parser("export-ifc", help="экспорт векторного плана в IFC для ArchiCAD")
     exp.add_argument("plan_json", nargs="+", help="plan.json из vectorize (несколько - этажи одного IFC)")
     exp.add_argument("--out", required=True, help="выходной IFC файл (.ifc)")
@@ -336,6 +341,11 @@ def main(argv: list[str] | None = None) -> None:
         from .vectorize import main_vectorize
 
         main_vectorize(args.pred_dir, args.out)
+        return
+    if args.cmd == "snap":
+        from .cloudsnap import main_snap
+
+        main_snap(args.plan_json, args.e57, args.out)
         return
 
     if args.cmd == "export-ifc":
