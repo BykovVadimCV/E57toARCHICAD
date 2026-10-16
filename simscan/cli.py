@@ -184,6 +184,11 @@ def main(argv: list[str] | None = None) -> None:
     vec = sub.add_parser("vectorize", help="векторизация предсказаний сети в векторный план")
     vec.add_argument("pred_dir", help="каталог предсказаний (из infer): sem.png, dist.npy, ...")
     vec.add_argument("--out", required=True, help="каталог для векторного плана")
+    imx = sub.add_parser("images", help="снимки E57 (images2D): как есть + cameras.json + панорамы стоянок")
+    imx.add_argument("e57")
+    imx.add_argument("--out", required=True, help="каталог: images/, panoramas/, cameras.json")
+    imx.add_argument("--no-pano", action="store_true", help="без панорам стоянок (только снимки и cameras.json)")
+    imx.add_argument("--pano-width", type=int, help="ширина панорамы (по умолчанию - по снимкам, до 8192)")
     sn = sub.add_parser("snap", help="привязка векторного плана к облаку E57 (грани стен - по точкам)")
     sn.add_argument("plan_json", nargs="+", help="plan.json уровней одного E57 (из vectorize / infer --plan)")
     sn.add_argument("--e57", required=True, help="исходный E57")
@@ -341,6 +346,11 @@ def main(argv: list[str] | None = None) -> None:
         from .vectorize import main_vectorize
 
         main_vectorize(args.pred_dir, args.out)
+        return
+    if args.cmd == "images":
+        from .e57images import extract
+
+        extract(args.e57, args.out, panoramas=not args.no_pano, pano_width=args.pano_width)
         return
     if args.cmd == "snap":
         from .cloudsnap import main_snap
