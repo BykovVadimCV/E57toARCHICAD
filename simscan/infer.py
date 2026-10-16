@@ -178,10 +178,17 @@ def infer(ckpt, paths, out, tile: int = 512, tta=False, plan: bool = False, batc
                                             log)))
                 log(done[-1])
             continue
+        lv_dirs = []
         for k, r in enumerate(rasterize_e57(p, log=log), 1):
             scene = {"source": p.name, "level": f"L{k}", "floor_z": r["level"]["floor_z"],
                      "ceiling_z": r["level"]["ceiling_z"], "frame": r["frame"], "pixel_to_world": affine(r["frame"])}
-            done.append(str(infer_input(model, dev, r["input"], Path(out) / p.stem / f"L{k}", scene, tile, tta, plan,
-                                        batch, log)))
+            lv_dirs.append(infer_input(model, dev, r["input"], Path(out) / p.stem / f"L{k}", scene, tile, tta, plan,
+                                       batch, log))
+            done.append(str(lv_dirs[-1]))
             log(done[-1])
+        plans = [d / "plan.json" for d in lv_dirs if (d / "plan.json").exists()]
+        if plan and plans:                                 # грани стен - по облаку этого же E57
+            from .cloudsnap import main_snap
+
+            main_snap(plans, p, log=log)
     return done
