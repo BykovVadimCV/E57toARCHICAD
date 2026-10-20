@@ -357,6 +357,36 @@ def inspect_e57():
         traceback.print_exc()
 
 
+def analytics_e57():
+    """Весь конвейер на одном E57 с диагностикой каждого шага -> один zip для разбора."""
+    from simscan.analytics import analytics
+
+    clear_screen()
+    print_header("АНАЛИТИКА E57 (архив для разбора)")
+    e57_path = get_e57_file()
+    model_path = None
+    if get_input("Прогнать сеть? (y/n)", "y").lower() == "y":
+        model_path = ensure_model_exists()
+    tta = get_input("TTA для сети (none / flip / d4)", "none").lower()
+    if tta not in ("none", "flip", "d4"):
+        print_warning(f"Неизвестный TTA «{tta}» - без TTA")
+        tta = "none"
+    cell = get_input("Строить и cellplan (дольше)? (y/n)", "y").lower() == "y"
+    pano = get_input("Добавить панорамы стоянок (это фото объекта)? (y/n)", "n").lower() == "y"
+    try:
+        zip_path = analytics(e57_path, e57_path.parent, model=model_path, tta=tta, cellplan=cell, panoramas=pano,
+                             log=lambda x: print(f"  {Colors.OKBLUE}→{Colors.ENDC} {x}"))
+        summary = zip_path.with_suffix("") / "SUMMARY.md"
+        if summary.exists():
+            print(f"\n{Colors.BOLD}СВОДКА:{Colors.ENDC}")
+            print(summary.read_text(encoding="utf-8"))
+        print_success(f"Архив для разбора: {zip_path}")
+    except Exception as e:
+        print_error(f"Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def batch_convert():
     """Пакетная конвертация нескольких E57 файлов."""
     clear_screen()
@@ -469,9 +499,10 @@ def show_menu():
         print(f"  {Colors.OKCYAN}3.{Colors.ENDC} Пакетная конвертация")
         print(f"  {Colors.OKCYAN}4.{Colors.ENDC} Настройка модели")
         print(f"  {Colors.OKCYAN}5.{Colors.ENDC} О программе")
+        print(f"  {Colors.OKCYAN}6.{Colors.ENDC} Аналитика E57 → архив для разбора")
         print(f"  {Colors.OKCYAN}0.{Colors.ENDC} Выход")
         
-        choice = get_input("\nВыберите опцию (0-5)", "1")
+        choice = get_input("\nВыберите опцию (0-6)", "1")
         
         if choice == '1':
             full_pipeline()
@@ -487,6 +518,9 @@ def show_menu():
             input(f"\n{Colors.OKCYAN}Нажмите Enter для продолжения...{Colors.ENDC}")
         elif choice == '5':
             show_about()
+            input(f"\n{Colors.OKCYAN}Нажмите Enter для продолжения...{Colors.ENDC}")
+        elif choice == '6':
+            analytics_e57()
             input(f"\n{Colors.OKCYAN}Нажмите Enter для продолжения...{Colors.ENDC}")
         elif choice == '0':
             print_info("До свидания!")
