@@ -60,7 +60,7 @@ ARC_R = (1.5, 40.0)                  # радиусы дуг, м
 ARC_MIN_CHORD_M = 1.0                # дуга: хорда не короче,
 ARC_MIN_SAG_M = 0.08                 # стрела не меньше и окружность в 3 раза точнее прямой
 MIN_ROOM_M2 = 1.0
-MIN_ENCLOSED = 0.85                   # доля границы помещения на стенах и проёмах
+MIN_ENCLOSED = 0.5                    # доля границы помещения на стенах и проёмах минус доля на улице
 GAP_M = 0.5                          # закрываемый разрыв стены
 GAP_MAX_M = 0.8                      # и до стольких - если в щели есть хоть слабая конструкция
 
@@ -800,12 +800,40 @@ def _faces(items: list, margin: float) -> list:
     return out
 
 
-def snap_outline(poly: np.ndarray, items: list, px: float, tol_m: float = 0.04, ang_deg: float = 5.0) -> np.ndarray:
+def _simplify_free(merged: list, eps: float) -> list:
+    """Цепочки сторон контура не на гранях стен (стены там сеть не нашла, граница - по
+    вероятностям, рваная) -> ломаная с допуском eps; концы цепочек остаются на месте."""
+    import cv2
+
+    if all(e[2] is None for e in merged):
+        q = cv2.approxPolyDP(np.array([e[0] for e in merged], np.float32)[:, None], eps, True)[:, 0].astype(float)
+        return merged if len(q) < 3 else [[q[i], q[(i + 1) % len(q)], None] for i in range(len(q))]
+    k = next(i for i, e in enumerate(merged) if e[2] is not None)
+    merged = merged[k:] + merged[:k]                     # начало - на грани
+    out, run = [], []
+    for e in merged + [None]:
+        if e is not None and e[2] is None:
+            run.append(e)
+            continue
+        if len(run) > 1:
+            line = np.array([run[0][0]] + [r[1] for r in run], np.float32)
+            q = cv2.approxPolyDP(line[:, None], eps, False)[:, 0].astype(float)
+            out += [[a, b, None] for a, b in zip(q[:-1], q[1:])]
+        else:
+            out += run
+        run = []
+        if e is not None:
+            out.append(e)
+    return out
+
+
+def snap_outline(poly: np.ndarray, items: list, px: float, tol_m: float = 0.04, ang_deg: float = 5.0,
+                 free_m: float = 0.12) -> np.ndarray:
     """Стороны контура помещения -> на грани стен (ближе tol_m, угол до ang_deg); соседние
     стороны на одной грани - одна; угол - пересечение граней соседних сторон (параллельных -
     прямоугольная ступенька); непривязанные стороны до 40 см между двумя гранями (щель на
-    стыке) - вон. Как у cellplan: грань
-    помещения - грань стены. Если результат странный - исходный контур."""
+    стыке) - вон; длиннее - упрощаются с допуском free_m (там граница - по сети, без стен).
+    Как у cellplan: грань помещения - грань стены. Если результат странный - исходный контур."""
     F = _faces(items, 0.15 / px)
     tol, sin_a = tol_m / px, math.sin(math.radians(ang_deg))
     n = len(poly)
@@ -872,6 +900,7 @@ def snap_outline(poly: np.ndarray, items: list, px: float, tol_m: float = 0.04, 
             drop.append(k)
             k = (k + 1) % len(merged)
         merged = [e for k, e in enumerate(merged) if k not in drop]
+    merged = _simplify_free(merged, free_m / px)
     out = []
     m = len(merged)
     for i in range(m):
@@ -911,9 +940,10 @@ def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float, up: int = 
     1. затравки - то, что сеть считает помещением, за вычетом преграды (итоговые стены + маска
        конструкции), сжатое на 20 см (щели уже 40 см рвутся, комнаты не сливаются); остальное
        свободное - к ближайшей затравке геодезическим ростом;
-    2. вон - меньше MIN_ROOM_M2 и не замкнутое стенами: граница меньше чем на MIN_ENCLOSED
-       проходит по стенам и проёмам (площадка за входной дверью, кусок улицы: у комнат 0,98-1,0,
-       у площадки на реальном скане 0,62);
+    2. вон - меньше MIN_ROOM_M2 и не замкнутое стенами: доля границы по стенам и проёмам минус
+       доля прямо по улице (между комнатой и улицей всегда стена) меньше MIN_ENCLOSED. У комнат
+       0,93-1,0, у больших с дырами в стенах сети 0,67-0,71; у площадки за входной дверью,
+       террасы между двумя стенами, улицы за окном 0,2-0,36 (реальные сканы и тесты);
     3. область помещения - в растре в up раз мельче дорастает в обход тел векторных стен (до
        15 см): помещение доходит ровно до их граней;
     4. контур - clean_outline, затем snap_outline: стороны - на гранях стен, углы - их
@@ -940,13 +970,13 @@ def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float, up: int = 
         if not tgt.any():
             break
         lab[tgt] = grow[tgt]
-    good = []
+    good, street = [], prob[0] > 0.5
     for k in np.unique(lab):
         m = (lab == k).astype(np.uint8)
         if k == 0 or m.sum() * px * px < MIN_ROOM_M2:
             continue
         ring = (cv2.dilate(m, k3) > 0) & (m == 0)
-        if ring.any() and bar[ring].mean() < MIN_ENCLOSED:
+        if ring.any() and bar[ring].mean() - (street & (bar == 0))[ring].mean() < MIN_ENCLOSED:
             continue                                       # граница - не по стенам: не помещение
         good.append(k)
     lab = np.where(np.isin(lab, good), lab, 0)
