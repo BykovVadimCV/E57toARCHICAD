@@ -269,11 +269,12 @@ def snap_plan(plan: dict, xy: np.ndarray, log=print) -> dict:
     old_faces = _faces_of(walls)
     n_two = n_one = 0
     moves = []
-    items = []
+    items, per_wall = [], []
     rooms = [np.asarray(r["points"], float) for r in plan.get("rooms", [])]
     for w in walls:
         p = np.asarray(w["points"], float)
         it = {"pts": p.copy(), "t": float(w.get("thickness") or 0.1), "arc": w.get("arc")}
+        rec = {"id": w.get("id"), "faces": 0, "t_net_cm": round(it["t"] * 100, 1), "status": "not_straight"}
         if len(p) == 2 and not w.get("arc") and len(xy):
             # помещение с одной стороны - грань только с неё: снаружи изнутри видны рамы и
             # откосы окон, а не фасад (толщина наружу - по сети, как в разметке)
@@ -284,13 +285,17 @@ def snap_plan(plan: dict, xy: np.ndarray, log=print) -> dict:
             sides = tuple(sg for sg in (1, -1)
                           if any(_inside(m + n * sg * (t / 2 + 0.3), q) for m in probe for q in rooms)) or (1, -1)
             r = snap_wall(w, xy, sides)
+            rec.update(status="no_face", searched_sides=len(sides))
             if r is not None:
+                rec.update(status="snapped", faces=int(r["sides"]), move_cm=round(float(r["move"]) * 100, 2),
+                           t_cloud_cm=round(float(r["t"]) * 100, 1), rms_mm=round(float(r["rms"]) * 1000, 1))
                 it["pts"] = np.array([r["a"], r["b"]])
                 it["t"] = r["t"]
                 moves.append(r["move"])
                 n_two += r["sides"] == 2
                 n_one += r["sides"] == 1
         items.append(it)
+        per_wall.append(rec)
     join(items, lambda m: m, tol_m=0.03, free_reach_m=0.0)  # углы - пересечением новых осей
     out = json.loads(json.dumps(plan))
     for w, it in zip(out["walls"], items):
@@ -317,7 +322,7 @@ def snap_plan(plan: dict, xy: np.ndarray, log=print) -> dict:
                       for k in range(len(q))]
     rep = {"points": int(len(xy)), "walls": len(walls), "two_faces": int(n_two), "one_face": int(n_one),
            "move_cm_median": round(float(np.median(moves)) * 100, 2) if moves else None,
-           "move_cm_max": round(float(np.max(moves)) * 100, 2) if moves else None}
+           "move_cm_max": round(float(np.max(moves)) * 100, 2) if moves else None, "per_wall": per_wall}
     out.setdefault("metadata", {})["snap"] = rep
     log(f"{plan.get('level', '')}: к облаку - стен {n_two + n_one} из {len(walls)} (обе грани {n_two}, одна "
         f"{n_one}), сдвиг медиана {rep['move_cm_median']} см, макс {rep['move_cm_max']} см")

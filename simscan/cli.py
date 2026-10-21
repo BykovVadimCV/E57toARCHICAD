@@ -4,6 +4,7 @@
     python -m simscan generate --out D:/synth --count 1 --set scanner.angular_step_deg=0.3
     python -m simscan dump-config > cfg.yaml
     python -m simscan inspect-e57 D:/scans/kvartira.e57    # отчёт по реальному E57 -> _report.zip
+    python -m simscan analytics D:/scans/kvartira.e57 --model best.pt   # весь конвейер + диагностика -> zip
     python -m simscan assets --source gso --out D:/scans --per-role 40
     python -m simscan pair D:/synth/scene_00000 D:/synth/scene_00001 --out pairs.png
 """
@@ -135,6 +136,16 @@ def main(argv: list[str] | None = None) -> None:
     ie.add_argument("--out", help="каталог отчёта (по умолчанию <файл>_report рядом с файлом)")
     ie.add_argument("--no-sample", action="store_true", help="без прореженного облака sample.npz")
     ie.add_argument("--chunk", type=int, default=2_000_000, help="точек за одно чтение")
+    an = sub.add_parser("analytics", help="весь конвейер на одном E57 с диагностикой каждого шага -> один zip")
+    an.add_argument("e57")
+    an.add_argument("--out", help="куда положить <файл>_analytics/ и .zip (по умолчанию рядом с файлом)")
+    src_ = an.add_mutually_exclusive_group()
+    src_.add_argument("--model", help="чекпойнт сети: прогнать её")
+    src_.add_argument("--pred", help="готовый каталог infer этого файла (уровни с prob.npz, scene.json)")
+    an.add_argument("--tta", choices=["none", "flip", "d4"], default="none")
+    an.add_argument("--no-cellplan", action="store_true", help="без второго построителя (быстрее)")
+    an.add_argument("--panoramas", action="store_true", help="добавить панорамы стоянок 2048 px (это фото объекта)")
+    an.add_argument("--max-file-mb", type=float, default=40.0, help="файлы крупнее в архив не идут")
     fp = sub.add_parser("floorplan", help="план из сведённого облака: стены, окна, двери, помещения")
     fp.add_argument("e57")
     fp.add_argument("--out", help="каталог (по умолчанию <файл>_plan рядом с файлом)")
@@ -184,6 +195,11 @@ def main(argv: list[str] | None = None) -> None:
     vec = sub.add_parser("vectorize", help="векторизация предсказаний сети в векторный план")
     vec.add_argument("pred_dir", help="каталог предсказаний (из infer): sem.png, dist.npy, ...")
     vec.add_argument("--out", required=True, help="каталог для векторного плана")
+    imx = sub.add_parser("images", help="снимки E57 (images2D): как есть + cameras.json + панорамы стоянок")
+    imx.add_argument("e57")
+    imx.add_argument("--out", required=True, help="каталог: images/, panoramas/, cameras.json")
+    imx.add_argument("--no-pano", action="store_true", help="без панорам стоянок (только снимки и cameras.json)")
+    imx.add_argument("--pano-width", type=int, help="ширина панорамы (по умолчанию - по снимкам, до 8192)")
     sn = sub.add_parser("snap", help="привязка векторного плана к облаку E57 (грани стен - по точкам)")
     sn.add_argument("plan_json", nargs="+", help="plan.json уровней одного E57 (из vectorize / infer --plan)")
     sn.add_argument("--e57", required=True, help="исходный E57")
@@ -304,6 +320,12 @@ def main(argv: list[str] | None = None) -> None:
         print(compare_reports(args.reports, names, Path(args.out)))
         print(args.out)
         return
+    if args.cmd == "analytics":
+        from .analytics import analytics
+
+        print(analytics(args.e57, args.out, model=args.model, pred=args.pred, tta=args.tta,
+                        cellplan=not args.no_cellplan, panoramas=args.panoramas, max_file_mb=args.max_file_mb))
+        return
     if args.cmd == "inspect-e57":
         from pathlib import Path
 
@@ -341,6 +363,11 @@ def main(argv: list[str] | None = None) -> None:
         from .vectorize import main_vectorize
 
         main_vectorize(args.pred_dir, args.out)
+        return
+    if args.cmd == "images":
+        from .e57images import extract
+
+        extract(args.e57, args.out, panoramas=not args.no_pano, pano_width=args.pano_width)
         return
     if args.cmd == "snap":
         from .cloudsnap import main_snap

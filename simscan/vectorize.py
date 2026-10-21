@@ -60,7 +60,7 @@ ARC_R = (1.5, 40.0)                  # радиусы дуг, м
 ARC_MIN_CHORD_M = 1.0                # дуга: хорда не короче,
 ARC_MIN_SAG_M = 0.08                 # стрела не меньше и окружность в 3 раза точнее прямой
 MIN_ROOM_M2 = 1.0
-MIN_ENCLOSED = 0.85                   # доля границы помещения на стенах и проёмах
+MIN_ENCLOSED = 0.5                    # доля границы помещения на стенах и проёмах минус доля на улице
 GAP_M = 0.5                          # закрываемый разрыв стены
 GAP_MAX_M = 0.8                      # и до стольких - если в щели есть хоть слабая конструкция
 
@@ -800,12 +800,40 @@ def _faces(items: list, margin: float) -> list:
     return out
 
 
-def snap_outline(poly: np.ndarray, items: list, px: float, tol_m: float = 0.04, ang_deg: float = 5.0) -> np.ndarray:
+def _simplify_free(merged: list, eps: float) -> list:
+    """Цепочки сторон контура не на гранях стен (стены там сеть не нашла, граница - по
+    вероятностям, рваная) -> ломаная с допуском eps; концы цепочек остаются на месте."""
+    import cv2
+
+    if all(e[2] is None for e in merged):
+        q = cv2.approxPolyDP(np.array([e[0] for e in merged], np.float32)[:, None], eps, True)[:, 0].astype(float)
+        return merged if len(q) < 3 else [[q[i], q[(i + 1) % len(q)], None] for i in range(len(q))]
+    k = next(i for i, e in enumerate(merged) if e[2] is not None)
+    merged = merged[k:] + merged[:k]                     # начало - на грани
+    out, run = [], []
+    for e in merged + [None]:
+        if e is not None and e[2] is None:
+            run.append(e)
+            continue
+        if len(run) > 1:
+            line = np.array([run[0][0]] + [r[1] for r in run], np.float32)
+            q = cv2.approxPolyDP(line[:, None], eps, False)[:, 0].astype(float)
+            out += [[a, b, None] for a, b in zip(q[:-1], q[1:])]
+        else:
+            out += run
+        run = []
+        if e is not None:
+            out.append(e)
+    return out
+
+
+def snap_outline(poly: np.ndarray, items: list, px: float, tol_m: float = 0.04, ang_deg: float = 5.0,
+                 free_m: float = 0.12) -> np.ndarray:
     """Стороны контура помещения -> на грани стен (ближе tol_m, угол до ang_deg); соседние
     стороны на одной грани - одна; угол - пересечение граней соседних сторон (параллельных -
     прямоугольная ступенька); непривязанные стороны до 40 см между двумя гранями (щель на
-    стыке) - вон. Как у cellplan: грань
-    помещения - грань стены. Если результат странный - исходный контур."""
+    стыке) - вон; длиннее - упрощаются с допуском free_m (там граница - по сети, без стен).
+    Как у cellplan: грань помещения - грань стены. Если результат странный - исходный контур."""
     F = _faces(items, 0.15 / px)
     tol, sin_a = tol_m / px, math.sin(math.radians(ang_deg))
     n = len(poly)
@@ -872,6 +900,7 @@ def snap_outline(poly: np.ndarray, items: list, px: float, tol_m: float = 0.04, 
             drop.append(k)
             k = (k + 1) % len(merged)
         merged = [e for k, e in enumerate(merged) if k not in drop]
+    merged = _simplify_free(merged, free_m / px)
     out = []
     m = len(merged)
     for i in range(m):
@@ -906,22 +935,12 @@ def snap_outline(poly: np.ndarray, items: list, px: float, tol_m: float = 0.04, 
     return q
 
 
-def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float, up: int = 4):
-    """Помещения: где они - по сети, где их грани - по стенам.
-    1. затравки - то, что сеть считает помещением, за вычетом преграды (итоговые стены + маска
-       конструкции), сжатое на 20 см (щели уже 40 см рвутся, комнаты не сливаются); остальное
-       свободное - к ближайшей затравке геодезическим ростом;
-    2. вон - меньше MIN_ROOM_M2 и не замкнутое стенами: граница меньше чем на MIN_ENCLOSED
-       проходит по стенам и проёмам (площадка за входной дверью, кусок улицы: у комнат 0,98-1,0,
-       у площадки на реальном скане 0,62);
-    3. область помещения - в растре в up раз мельче дорастает в обход тел векторных стен (до
-       15 см): помещение доходит ровно до их граней;
-    4. контур - clean_outline, затем snap_outline: стороны - на гранях стен, углы - их
-       пересечения, щели на стыках - вон.
-    -> ([{poly, faces, label}] в пикселях сети, растр меток up, up)."""
+def room_candidates(prob: np.ndarray, items: list, mask: np.ndarray, px: float):
+    """Пп. 1-2 rooms: затравки, рост и оценка замкнутости каждой области.
+    -> (метки [H, W] до отбора, [{label, area_m2, walls, street, score, ok, centre}]); centre - (x, y)
+    в пикселях сети; walls - доля границы по стенам и проёмам, street - прямо по улице."""
     import cv2
 
-    H, W = prob.shape[1:]
     bar = mask.astype(np.uint8).copy()
     for w in items:
         cv2.polylines(bar, [np.round(w["pts"]).astype(np.int32)], False, 1, max(2, int(round(w["t"]))))
@@ -940,15 +959,44 @@ def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float, up: int = 
         if not tgt.any():
             break
         lab[tgt] = grow[tgt]
-    good = []
+    cands, street = [], prob[0] > 0.5
     for k in np.unique(lab):
-        m = (lab == k).astype(np.uint8)
-        if k == 0 or m.sum() * px * px < MIN_ROOM_M2:
+        if k == 0:
             continue
+        m = (lab == k).astype(np.uint8)
         ring = (cv2.dilate(m, k3) > 0) & (m == 0)
-        if ring.any() and bar[ring].mean() < MIN_ENCLOSED:
-            continue                                       # граница - не по стенам: не помещение
-        good.append(k)
+        wf = float(bar[ring].mean()) if ring.any() else 1.0
+        sf = float((street & (bar == 0))[ring].mean()) if ring.any() else 0.0
+        a = float(m.sum()) * px * px
+        ys, xs = np.nonzero(m)
+        cands.append({"label": int(k), "area_m2": round(a, 2), "walls": round(wf, 3), "street": round(sf, 3),
+                      "score": round(wf - sf, 3), "ok": bool(a >= MIN_ROOM_M2 and wf - sf >= MIN_ENCLOSED),
+                      "centre": [round(float(xs.mean()), 1), round(float(ys.mean()), 1)]})
+    return lab, cands
+
+
+def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float, up: int = 4, trace: dict | None = None):
+    """Помещения: где они - по сети, где их грани - по стенам.
+    1. затравки - то, что сеть считает помещением, за вычетом преграды (итоговые стены + маска
+       конструкции), сжатое на 20 см (щели уже 40 см рвутся, комнаты не сливаются); остальное
+       свободное - к ближайшей затравке геодезическим ростом;
+    2. вон - меньше MIN_ROOM_M2 и не замкнутое стенами: доля границы по стенам и проёмам минус
+       доля прямо по улице (между комнатой и улицей всегда стена) меньше MIN_ENCLOSED. У комнат
+       0,93-1,0, у больших с дырами в стенах сети 0,67-0,71; у площадки за входной дверью,
+       террасы между двумя стенами, улицы за окном 0,2-0,36 (реальные сканы и тесты);
+    3. область помещения - в растре в up раз мельче дорастает в обход тел векторных стен (до
+       15 см): помещение доходит ровно до их граней;
+    4. контур - clean_outline, затем snap_outline: стороны - на гранях стен, углы - их
+       пересечения, щели на стыках - вон.
+    -> ([{poly, faces, label}] в пикселях сети, растр меток up, up). trace (словарь) получает
+    кандидатов п. 2 (room_candidates) и их метки."""
+    import cv2
+
+    H, W = prob.shape[1:]
+    lab, cands = room_candidates(prob, items, mask, px)
+    if trace is not None:
+        trace["candidates"], trace["candidate_labels"] = cands, lab
+    good = [c["label"] for c in cands if c["ok"]]
     lab = np.where(np.isin(lab, good), lab, 0)
     # п. 3: метки - в мелкий растр, до граней стен
     lab_up = cv2.resize(lab.astype(np.float32), (W * up, H * up), interpolation=cv2.INTER_NEAREST)
@@ -1052,8 +1100,10 @@ def vectorize(pred_dir, log=print) -> dict:
 
 
 def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.ndarray | None, scene: dict,
-                     log=print) -> dict:
-    """Выход сети (prob [8,H,W], orient [2,H,W], heights [2,H,W]) и scene.json уровня -> план."""
+                     log=print, trace: dict | None = None) -> dict:
+    """Выход сети (prob [8,H,W], orient [2,H,W], heights [2,H,W]) и scene.json уровня -> план.
+    trace (словарь, для аналитики) получает число стен после каждого шага (stages), маску
+    конструкции (mask) и кандидатов в помещения последнего отбора (candidates, candidate_labels)."""
     prob = np.asarray(prob, np.float32)
     M = np.asarray(scene["pixel_to_world"], float)
     px = float(abs(M[0, 0]))
@@ -1065,6 +1115,14 @@ def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.nd
     mask = struct_mask(prob, px)
     items = walls_from_mask(mask, px, orient)
     n0 = len(items)
+
+    def stage(name):
+        if trace is not None:
+            trace.setdefault("stages", []).append({"stage": name, "walls": len(items)})
+
+    if trace is not None:
+        trace["mask"] = mask
+    stage("skeleton")
     p_struct = prob[list(STRUCT)].sum(0)
 
     def bridge_ok(a, b):
@@ -1083,15 +1141,20 @@ def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.nd
 
     regularize(items, P=P)
     items = merge(GAP_M)
+    stage("merge_collinear")
     join(items, P, free_reach_m=GAP_M, bridge_ok=bridge_ok)
     regularize(items, P=P)
     items = merge(0.05)
     items = [w for w in items if np.linalg.norm(w["pts"][-1] - w["pts"][0]) * px >= MIN_WALL_M or w.get("arc")]
+    stage("join_and_min_length")
     items = tidy(items, P, reach_m=GAP_M, bridge_ok=bridge_ok)
+    stage("tidy")
     items = square_short(items, p_struct, px)               # ниши и пилястры - прямоугольные
     items = merge(0.05)                                     # стыки после чистки - соосные куски впритык
+    stage("square_short")
     items = chain_at_openings(prob, items, px)
-    room_list, lab_up, up = rooms(prob, items, mask, px)
+    stage("chain_at_openings")
+    room_list, lab_up, up = rooms(prob, items, mask, px, trace=trace)
     w_rooms = wall_rooms(items, lab_up, up, px)
     if room_list and not all(w_rooms):
         # стена, не ограничивающая ни одного помещения (терраса, соседнее неотснятое), - вон;
@@ -1110,7 +1173,8 @@ def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.nd
         items = [items[k] for k in keep]
         join(items, P, free_reach_m=GAP_M, bridge_ok=bridge_ok)   # соседи - снова в угол
         items = [w for w in items if np.linalg.norm(w["pts"][-1] - w["pts"][0]) * px >= MIN_WALL_M or w.get("arc")]
-        room_list, lab_up, up = rooms(prob, items, mask, px)
+        stage("drop_roomless")
+        room_list, lab_up, up = rooms(prob, items, mask, px, trace=trace)
         w_rooms = wall_rooms(items, lab_up, up, px)
     ops = openings(prob, heights, items, px, ceil_m)
 
