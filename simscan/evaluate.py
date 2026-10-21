@@ -404,7 +404,7 @@ def evaluate(ckpt, data, split: str = "test", out=None, tta=False, tile: int = 5
     ids = (data / "splits" / f"{split}.txt").read_text(encoding="utf-8").split()
     if limit:
         ids = ids[:limit]
-    model, dev = load_model(ckpt)
+    model, dev = load_model(ckpt, log=log)
     stats, rows, heap, vrows = [], [], [], []
     groups: dict = {}
     for k, i in enumerate(ids):
@@ -418,7 +418,7 @@ def evaluate(ckpt, data, split: str = "test", out=None, tta=False, tile: int = 5
         row = {"id": i, **level_tags(scene), **level_summary(st)}
         if vector and (d / "vector.json").exists():
             try:
-                plan = vectorize_arrays(r["prob"], r["orient"], r["heights"], scene, log=lambda *a: None)
+                plan = vectorize_arrays(r["prob"], r.get("orient"), r.get("heights"), scene, log=lambda *a: None)
                 vm = vector_metrics(plan, json.loads((d / "vector.json").read_text(encoding="utf-8")))
             except Exception as exc:                          # уровень без стен и т.п. - не рушить разбор
                 vm = {"error": repr(exc)[:200]}

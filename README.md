@@ -404,6 +404,14 @@ python -m simscan infer runs/r1/best.pt kvartira.e57 --out pred
 python -m simscan infer runs/r1/best.pt kvartira.e57 --out pred --tta d4 --plan  # TTA (8 вариантов) + векторный план
 ```
 
+Чекпойнт - `PlanNet` из `simscan train` или U-Net из segmentation_models_pytorch с кодировщиком
+ResNet (`smp.Unet("resnet18/34/50/...", in_channels=8, classes=8)`, ключи `encoder.*`,
+`decoder.blocks.*`, `segmentation_head.*`): формат определяется по весам, smp для этого не нужен
+(`simscan/smpunet.py` - та же сеть на чистом torch, сверена с smp поэлементно). У U-Net из smp
+нет регрессионных голов: ориентация стен и высоты проёмов не предсказываются, vectorize и
+cellplan обходятся без них (13 выходов = 8 классов + 5 регрессий как у PlanNet - тоже понимает).
+Неизвестный чекпойнт - ошибка с описанием, что в файле; меню проверяет модель до растеризации.
+
 `make-dataset` продолжает с места обрыва. Скан на диск не пишется: растр строится из памяти теми же
 точками, что легли бы в scan.e57 (`MemorySource`; `--keep-scans` - через файл). `--variants N` -
 N растров одного скана (первый как есть, остальные с поворотом облака на случайный угол и
