@@ -79,6 +79,25 @@ def get_model_path() -> Path | None:
     return None
 
 
+def check_model(path: Path) -> bool:
+    """Показать, что за сеть в файле; False - конвейер её не поймёт (сразу, а не после растеризации)."""
+    from simscan.infer import describe_checkpoint
+
+    try:
+        info = describe_checkpoint(path)
+    except Exception as e:
+        print_error(f"Не читается как чекпойнт: {e}")
+        return False
+    if info["format"] == "unknown" or info.get("in_channels") != 8 or info.get("classes") not in (8, 13):
+        print_error(f"{path.name}: {info['text']}, вход {info.get('in_channels')}, выход {info.get('classes')} - "
+                    "нужна PlanNet (simscan train) или smp Unet(ResNet) с входом 8 каналов и 8 классами")
+        return False
+    print_info(f"Сеть: {info['text']}")
+    if info["format"] == "smp_unet" and info["classes"] == 8:
+        print_warning("У этой сети нет регрессионных голов: ориентация стен и высоты проёмов - по умолчанию")
+    return True
+
+
 def ensure_model_exists() -> Path:
     """Проверить наличие модели или запросить путь."""
     model_path = get_model_path()
@@ -86,7 +105,7 @@ def ensure_model_exists() -> Path:
     if model_path:
         print_success(f"Найдена модель: {model_path}")
         use_it = get_input("Использовать эту модель? (y/n)", "y").lower()
-        if use_it == 'y':
+        if use_it == 'y' and check_model(model_path):
             return model_path
     
     while True:
@@ -102,7 +121,9 @@ def ensure_model_exists() -> Path:
             if retry != 'y':
                 sys.exit(1)
             continue
-        
+        if not check_model(path):
+            continue
+
         return path
 
 

@@ -168,6 +168,12 @@ def environment(model=None) -> dict:
             for b in iter(lambda: f.read(1 << 20), b""):
                 h.update(b)
         env["model"] = {"name": p.name, "bytes": p.stat().st_size, "sha256": h.hexdigest()}
+        try:
+            from .infer import describe_checkpoint
+
+            env["model"]["architecture"] = describe_checkpoint(p)
+        except Exception as e:                           # noqa: BLE001 - запишется и в шаге сети
+            env["model"]["architecture"] = {"format": "unreadable", "text": f"{type(e).__name__}: {e}"}
     return env
 
 
@@ -623,7 +629,7 @@ def analytics(e57, out=None, model=None, pred=None, tta: str = "none", cellplan:
         with run.step("net"):
             from .infer import infer_input, load_model
 
-            net, dev = load_model(model)
+            net, dev = load_model(model, log=run.log)
             for k, r in enumerate(rasters, 1):
                 d = infer_input(net, dev, r["input"], root / f"L{k}" / "net", r["scene"], tta=tta, log=run.log)
                 net_dirs[f"L{k}"] = d

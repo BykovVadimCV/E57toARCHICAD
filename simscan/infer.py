@@ -28,15 +28,70 @@ COLORS = np.array([[250, 250, 250], [222, 235, 247], [30, 30, 30], [214, 96, 77]
                    [244, 165, 130], [180, 180, 120], [150, 90, 170]], np.uint8)
 
 
-def load_model(ckpt, device=None):
+def _state_dict(ck) -> dict:
+    """Веса из чекпойнта любого из обычных видов: {"model": ...}, {"state_dict": ...} (Lightning,
+    префикс "model."), {"model_state_dict": ...} или сам state_dict; префикс "module." (DataParallel) - вон."""
+    sd = ck
+    if isinstance(ck, dict):
+        for key in ("model", "state_dict", "model_state_dict", "net_state_dict"):
+            if isinstance(ck.get(key), dict) and ck[key] and all(hasattr(v, "shape") for v in ck[key].values()):
+                sd = ck[key]
+                break
+    if not isinstance(sd, dict) or not sd or not all(hasattr(v, "shape") for v in sd.values()):
+        raise ValueError("в файле нет весов сети (ожидался словарь тензоров или {'model': ...})")
+    for pre in ("module.", "model.", "_orig_mod."):
+        if all(k.startswith(pre) for k in sd):
+            sd = {k[len(pre):]: v for k, v in sd.items()}
+    return sd
+
+
+def describe_checkpoint(ckpt) -> dict:
+    """Что за сеть в чекпойнте (без загрузки модели): {"format", "in_channels", "classes", "text"}."""
+    import torch
+
+    from .smpunet import is_smp_unet
+
+    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
+    sd = _state_dict(ck)
+    if "stem.0.weight" in sd and "sem.weight" in sd:
+        return {"format": "plannet", "in_channels": int(sd["stem.0.weight"].shape[1]),
+                "classes": int(sd["sem.weight"].shape[0]), "text": "PlanNet (simscan train)"}
+    if is_smp_unet(sd):
+        from .smpunet import SmpUnet
+
+        m = SmpUnet(sd)
+        return {"format": "smp_unet", "in_channels": m.in_channels, "classes": m.classes, "text": m.describe()}
+    heads = sorted({k.split(".")[0] for k in sd})
+    return {"format": "unknown", "text": f"неизвестная архитектура, верхние модули: {', '.join(heads[:12])}"}
+
+
+def load_model(ckpt, device=None, log=print):
+    """Чекпойнт -> (модель, устройство). Понимает PlanNet (simscan train) и smp.Unet с кодировщиком
+    ResNet (simscan/smpunet.py, без smp); у последней только классы, если выход 8 каналов."""
     import torch
 
     from .net import PlanNet
+    from .smpunet import N_CLASSES, SmpUnet, is_smp_unet
 
     dev = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     ck = torch.load(ckpt, map_location=dev, weights_only=False)
-    m = PlanNet(**ck.get("net", {})).to(dev).eval()
-    m.load_state_dict(ck["model"])
+    sd = _state_dict(ck)
+    if is_smp_unet(sd):
+        m = SmpUnet(sd)
+        if m.in_channels != 8 or m.classes not in (N_CLASSES, N_CLASSES + 5):
+            raise ValueError(f"{Path(ckpt).name}: {m.describe()} - конвейеру нужен вход 8 каналов (netinput.CHANNELS) "
+                             f"и выход {N_CLASSES} классов (или {N_CLASSES} + 5 регрессий)")
+        bad = m.load_state_dict(sd, strict=False)
+        missing = [k for k in bad.missing_keys if not k.endswith("num_batches_tracked")]
+        if missing or bad.unexpected_keys:
+            raise ValueError(f"{Path(ckpt).name}: веса smp Unet не легли: нет {missing[:5]}, лишние {bad.unexpected_keys[:5]}")
+        log(f"модель: {m.describe()}" + ("" if m.classes > N_CLASSES else
+                                          "; регрессионных голов нет - ориентация стен и высоты проёмов не используются"))
+        return m.to(dev).eval(), dev
+    if not ("stem.0.weight" in sd and "sem.weight" in sd):
+        raise ValueError(f"{Path(ckpt).name}: {describe_checkpoint(ckpt)['text']} - это не PlanNet и не smp Unet(ResNet)")
+    m = PlanNet(**(ck.get("net", {}) if isinstance(ck, dict) else {})).to(dev).eval()
+    m.load_state_dict(sd)
     return m, dev
 
 
@@ -57,9 +112,9 @@ def _inverse(r: dict, k: int, flip: bool) -> dict:
     if flip:
         out = {key: v[..., ::-1] for key, v in out.items()}
     out = {key: np.ascontiguousarray(v) for key, v in out.items()}
-    if k % 2:
+    if "orient" in out and k % 2:
         out["orient"] = -out["orient"]
-    if flip:
+    if "orient" in out and flip:
         out["orient"][1] = -out["orient"][1]
     return out
 
@@ -80,8 +135,9 @@ def predict(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 128, tta=
     lg = res.pop("logits")
     e = np.exp(lg - lg.max(0))
     res["prob"] = e / e.sum(0)
-    n = np.linalg.norm(res["orient"], axis=0, keepdims=True)
-    res["orient"] = res["orient"] / np.maximum(n, 1e-6)
+    if "orient" in res:
+        n = np.linalg.norm(res["orient"], axis=0, keepdims=True)
+        res["orient"] = res["orient"] / np.maximum(n, 1e-6)
     return res
 
 
@@ -103,8 +159,7 @@ def _predict_single(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 1
         xs.append(Wp - tile)
     r = np.minimum(np.arange(tile) + 1, tile - np.arange(tile)).astype(np.float32)
     wt = np.clip(np.minimum.outer(r, r) / max(overlap / 2, 1), 0.05, 1.0)
-    acc = {"logits": np.zeros((8, Hp, Wp), np.float32), "dist": np.zeros((1, Hp, Wp), np.float32),
-           "orient": np.zeros((2, Hp, Wp), np.float32), "heights": np.zeros((2, Hp, Wp), np.float32)}
+    acc = {"logits": np.zeros((8, Hp, Wp), np.float32)}           # регрессии - если сеть их выдаёт
     wsum = np.zeros((Hp, Wp), np.float32)
     pos = [(y, xx) for y in ys for xx in xs]
     with torch.inference_mode():
@@ -117,7 +172,9 @@ def _predict_single(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 1
             for n_, (y, xx) in enumerate(chunk):
                 acc["logits"][:, y:y + tile, xx:xx + tile] += o["sem"][n_] * wt
                 for k in ("dist", "orient", "heights"):
-                    acc[k][:, y:y + tile, xx:xx + tile] += o[k][n_] * wt
+                    if k in o:
+                        acc.setdefault(k, np.zeros((o[k].shape[1], Hp, Wp), np.float32))
+                        acc[k][:, y:y + tile, xx:xx + tile] += o[k][n_] * wt
                 wsum[y:y + tile, xx:xx + tile] += wt
     res = {k: (v / wsum)[:, :H, :W] for k, v in acc.items()}
     if return_logits:
@@ -125,8 +182,9 @@ def _predict_single(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 1
     lg = res.pop("logits")
     e = np.exp(lg - lg.max(0))
     res["prob"] = e / e.sum(0)
-    n = np.linalg.norm(res["orient"], axis=0, keepdims=True)
-    res["orient"] = res["orient"] / np.maximum(n, 1e-6)
+    if "orient" in res:
+        n = np.linalg.norm(res["orient"], axis=0, keepdims=True)
+        res["orient"] = res["orient"] / np.maximum(n, 1e-6)
     return res
 
 
@@ -151,7 +209,10 @@ def infer_input(model, dev, x: np.ndarray, out_dir, scene: dict | None = None, t
     cv2.imwrite(str(d / "sem.png"), sem)
     np.savez_compressed(d / "prob.npz", prob=r["prob"].astype(np.float16))
     for k in ("dist", "orient", "heights"):
-        np.save(d / f"{k}.npy", r[k].astype(np.float16))
+        if k in r:
+            np.save(d / f"{k}.npy", r[k].astype(np.float16))
+        else:
+            (d / f"{k}.npy").unlink(missing_ok=True)      # от прошлого прогона другой сетью
     if scene is not None:
         (d / "scene.json").write_text(json.dumps(scene, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
     _overlay(x, sem, d / "pred.png")
@@ -166,7 +227,7 @@ def infer(ckpt, paths, out, tile: int = 512, tta=False, plan: bool = False, batc
     """paths: файлы E57 или каталоги уровней с input.npy (dataset real/... или scenes/...)."""
     from .netinput import affine, rasterize_e57
 
-    model, dev = load_model(ckpt)
+    model, dev = load_model(ckpt, log=log)
     done = []
     for p in map(Path, paths):
         if p.is_dir():
