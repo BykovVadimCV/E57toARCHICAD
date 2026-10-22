@@ -461,6 +461,85 @@ def fit_chain(walls: list[dict], chain: list, xy: np.ndarray, rooms: list, why: 
     return res
 
 
+REVEAL_GAP_M = 0.06                  # разрыв в точках откоса больше - дальше улица
+REVEAL_MAX_M = 0.9                   # толще - не стена (балкон, ограждение)
+
+
+def reveal_depth(xy: np.ndarray, a: np.ndarray, d: np.ndarray, out: np.ndarray, s_jamb: float,
+                 band_m: float = 0.04) -> float | None:
+    """Глубина откоса у края окна: точки у s_jamb (± band_m вдоль стены) по отступу наружу от
+    внутренней грани (a - точка на внутренней грани, d - вдоль, out - наружу); непрерывная от
+    грани полоса без разрывов больше REVEAL_GAP_M -> её дальний край (наружная грань) или None."""
+    r = xy - a
+    s, u = r @ d, r @ out
+    m = (np.abs(s - s_jamb) <= band_m) & (u > -0.03) & (u < REVEAL_MAX_M + REVEAL_GAP_M)
+    us = np.sort(u[m])
+    if len(us) < 20 or us[0] > 0.05:
+        return None
+    gaps = np.flatnonzero(np.diff(us) > REVEAL_GAP_M)
+    end = float(us[gaps[0]] if len(gaps) else us[-1])
+    return end if 0.15 <= end <= REVEAL_MAX_M else None
+
+
+def exterior_by_reveals(plan: dict, xy: np.ndarray) -> int:
+    """Наружные стены (помещение с одной стороны) с окнами: толщина - глубина откосов окон
+    (медиана по откосам, нужно хотя бы два согласных в пределах 5 см); откос засчитывается, только
+    если уходит за плоскость рамы (иначе за стеклом не видно и глубина - до рамы). Внутренняя
+    грань остаётся, ось - наружу, окна - на новую ось. -> число стен с новой толщиной."""
+    rooms = [np.asarray(r["points"], float) for r in plan.get("rooms", [])]
+    wins: dict = {}
+    for o in plan.get("openings", []):
+        if o.get("opening_type") == "window":
+            wins.setdefault(o["wall_id"], []).append(o)
+    rec = {w.get("id"): w for w in plan.get("metadata", {}).get("snap", {}).get("per_wall", [])}
+    n = 0
+    for w in plan["walls"]:
+        p = np.asarray(w["points"], float)
+        if w["id"] not in wins or len(p) != 2 or w.get("arc"):
+            continue
+        a, b = p
+        d = _unit(b - a)
+        nrm = np.array([-d[1], d[0]])
+        t = float(w.get("thickness") or 0.1)
+        mid = (a + b) / 2
+        side = [sg for sg in (1, -1) if any(_inside(mid + nrm * sg * (t / 2 + 0.3), q) for q in rooms)]
+        if len(side) != 1:
+            continue                                       # не наружная (помещения с обеих сторон или нет)
+        out = -nrm * side[0]
+        inner = a - out * t / 2                            # точка на внутренней грани
+        deps = []
+        for o in wins[w["id"]]:
+            sa, sb = sorted(float((np.asarray(o[e], float) - a) @ d) for e in ("a", "b"))
+            # плоскость рамы - самый плотный слой поперёк проёма; откос должен уходить за неё (за
+            # стеклом видна наружная часть), иначе глубина - только до рамы, а не до фасада
+            r = xy - inner
+            ss, uu = r @ d, r @ out
+            mw = (ss > sa + 0.08) & (ss < sb - 0.08) & (uu > 0.03) & (uu < REVEAL_MAX_M)
+            if mw.sum() < 20:
+                continue
+            h, e_ = np.histogram(uu[mw], np.arange(0.03, REVEAL_MAX_M + 0.01, 0.01))
+            u_frame = float(e_[h.argmax()] + 0.005)
+            for sj in (sa, sb):
+                dpt = reveal_depth(xy, inner, d, out, sj)
+                if dpt is not None and dpt >= u_frame + 0.03:
+                    deps.append(dpt)
+        if len(deps) < 2:
+            continue
+        T = float(np.median(deps))
+        if sum(abs(x - T) <= 0.05 for x in deps) < 2 or abs(T - t) < 0.02:
+            continue
+        shift = out * (T - t) / 2
+        w["points"] = np.round(p + shift, 4).tolist()
+        w["thickness"] = round(T, 4)
+        for o in wins[w["id"]]:
+            o["a"] = np.round(np.asarray(o["a"], float) + shift, 4).tolist()
+            o["b"] = np.round(np.asarray(o["b"], float) + shift, 4).tolist()
+        if w["id"] in rec:
+            rec[w["id"]].update(t_reveal_cm=round(T * 100, 1), reveals=len(deps))
+        n += 1
+    return n
+
+
 def snap_plan(plan: dict, xy: np.ndarray, log=print) -> dict:
     """План (мировые метры) + точки уровня (x, y) -> уточнённый план; в metadata.snap - сводка."""
     from .walls import join
@@ -552,8 +631,17 @@ def snap_plan(plan: dict, xy: np.ndarray, log=print) -> dict:
            "move_cm_max": round(float(np.max(moves)) * 100, 2) if moves else None, "chains_straightened": n_chain,
            "per_wall": per_wall}
     out.setdefault("metadata", {})["snap"] = rep
+    rep["walls_by_reveals"] = exterior_by_reveals(out, xy) if len(xy) else 0
+    if rep["walls_by_reveals"]:                            # ось наружной стены ушла наружу - углы заново
+        its = [{"pts": np.asarray(w["points"], float), "t": float(w["thickness"]), "arc": w.get("arc")}
+               for w in out["walls"]]
+        join(its, lambda m: m, tol_m=0.03, free_reach_m=0.0)
+        for w, it in zip(out["walls"], its):
+            w["points"] = np.round(it["pts"], 4).tolist()
+            w["length"] = round(float(np.linalg.norm(np.diff(it["pts"], axis=0), axis=1).sum()), 4)
     log(f"{plan.get('level', '')}: к облаку - стен {n_two + n_one} из {len(walls)} (обе грани {n_two}, одна "
-        f"{n_one}), сдвиг медиана {rep['move_cm_median']} см, макс {rep['move_cm_max']} см")
+        f"{n_one}), сдвиг медиана {rep['move_cm_median']} см, макс {rep['move_cm_max']} см; цепочек выпрямлено "
+        f"{n_chain}, наружных по откосам {rep['walls_by_reveals']}")
     return out
 
 

@@ -119,3 +119,25 @@ def test_real_kink_kept():
     assert len(k["points"]) == 3
     rec = out["metadata"]["snap"]["per_wall"][0]
     assert rec.get("chain_reason") in ("kink", "bent", "no_face"), rec
+
+
+def test_exterior_thickness_from_window_reveals():
+    """Наружная стена 50 см (сеть - полоса 10 см от внутренней грани): по откосам двух окон -
+    толщина 0,5, внутренняя грань на месте, окна - на новой оси; дерево за окном не мешает."""
+    xy = np.vstack([_face([0, 0], [1.5, 0]), _face([2.7, 0], [4.0, 0]), _face([5.2, 0], [7, 0]),   # грань y = 0
+                    _face([1.5, 0], [1.5, 0.5]), _face([2.7, 0], [2.7, 0.5]),                     # откосы окна 1
+                    _face([4.0, 0], [4.0, 0.5]), _face([5.2, 0], [5.2, 0.5]),                     # окна 2
+                    _face([1.5, 0.35], [2.7, 0.35]), _face([4.0, 0.35], [5.2, 0.35]),             # рамы
+                    _face([1.8, 3.0], [2.4, 3.0]),                                                  # дерево
+                    _face([0, -3], [7, -3]), _face([0, -3], [0, 0]), _face([7, -3], [7, 0])])
+    plan = _plan([("E", [[-0.05, 0.05], [7.05, 0.05]], 0.10), ("S", [[0, -0.05], [0, -3]], 0.1)],
+                 [[[0, 0], [7, 0], [7, -3], [0, -3]]],
+                 [{"id": f"O{k}", "opening_type": "window", "wall_id": "E", "a": [x0, 0.05], "b": [x1, 0.05],
+                   "width": x1 - x0, "sill": 0.9, "head": 2.1} for k, (x0, x1) in enumerate(((1.5, 2.7), (4.0, 5.2)))])
+    out = snap_plan(plan, xy, log=lambda *a: None)
+    E = next(w for w in out["walls"] if w["id"] == "E")
+    assert abs(E["thickness"] - 0.5) < 0.03, E
+    p = np.asarray(E["points"])
+    assert np.abs(p[:, 1] - E["thickness"] / 2).max() < 0.02, p                    # внутренняя грань - y = 0
+    assert all(abs(o["a"][1] - p[0, 1]) < 0.02 for o in out["openings"])
+    assert out["metadata"]["snap"]["walls_by_reveals"] == 1

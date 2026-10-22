@@ -543,6 +543,8 @@ def snap_section(run: Run, e57: Path, plans: dict, root: Path) -> None:
                                                  "two_faces": rep["two_faces"], "one_face": rep["one_face"],
                                                  "move_cm_median": rep["move_cm_median"],
                                                  "move_cm_max": rep["move_cm_max"], "points": rep["points"],
+                                                 "chains_straightened": rep.get("chains_straightened"),
+                                                 "exterior_by_reveals": rep.get("walls_by_reveals"),
                                                  "not_snapped": "; ".join(f"{k}: {v}" for k, v in sorted(why.items()))}
         if able and done < 0.5 * len(able):
             run.warn(f"{lvl}: к облаку привязано {done} из {len(able)} стен, где это возможно (прямые, от 0,5 м, "
