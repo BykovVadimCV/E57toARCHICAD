@@ -486,8 +486,9 @@ def vectorize_section(run: Run, lvl: str, net_dir: Path, d: Path) -> dict:
                     "net_prob": round(float(v.mean()), 3) if len(v) else None})
     _write_csv(d / "openings.csv", ops)
     weak = [w["id"] for w in walls if w["net_support"] is not None and w["net_support"] < WEAK_WALL]
-    near = [c for c in cands if not c["ok"] and c["area_m2"] >= 4.0
-            and c["score"] >= V.MIN_ENCLOSED - NEAR_MISS]
+    near = [c for c in cands if not c["ok"] and c["area_m2"] >= 4.0          # отклонён по замкнутости, а не
+            and V.MIN_ENCLOSED - NEAR_MISS <= c["score"] < V.MIN_ENCLOSED      # как не увиденный сканером
+            and (c.get("seen") is None or c["seen"] >= V.MIN_SEEN)]
     run.facts.setdefault("vectorize", {})[lvl] = {
         "rooms": len(plan["rooms"]), "rooms_m2": round(sum(r["area"] for r in plan["rooms"]), 1),
         "walls": len(plan["walls"]), "doors": sum(o["opening_type"] == "door" for o in plan["openings"]),
@@ -524,15 +525,28 @@ def snap_section(run: Run, e57: Path, plans: dict, root: Path) -> None:
         save_png(snapped, d / "plan.png")
         save_svg(snapped, d / "plan.svg")
         _write_csv(d / "walls.csv", rep.get("per_wall", []))
-        straight = [w for w in rep.get("per_wall", []) if w["status"] != "not_straight"]
-        done = sum(w["status"] == "snapped" for w in straight)
-        run.facts.setdefault("snap", {})[lvl] = {"walls": len(straight), "snapped": done,
+        per = rep.get("per_wall", [])
+        # привязка возможна: прямая, длиннее 0,5 м, у грани есть точки (стену без точек сеть
+        # дорисовала - вокруг неотснятого)
+        able = [w for w in per if w["status"] not in ("not_straight", "short", "no_points")]
+        done = sum(w["status"] == "snapped" for w in able)
+        why: dict[str, int] = {}
+        for w in per:
+            if w["status"] == "snapped":
+                continue
+            key = w["status"]
+            for side in ("side+", "side-"):
+                if w.get(side):
+                    key += f" ({side}: {w[side].split(',')[0]})"
+            why[key] = why.get(key, 0) + 1
+        run.facts.setdefault("snap", {})[lvl] = {"walls": len(per), "able": len(able), "snapped": done,
                                                  "two_faces": rep["two_faces"], "one_face": rep["one_face"],
                                                  "move_cm_median": rep["move_cm_median"],
-                                                 "move_cm_max": rep["move_cm_max"], "points": rep["points"]}
-        if straight and done < 0.5 * len(straight):
-            run.warn(f"{lvl}: к облаку привязано {done} из {len(straight)} прямых стен - план и облако "
-                     "расходятся (уровень, кадр) или стены заставлены")
+                                                 "move_cm_max": rep["move_cm_max"], "points": rep["points"],
+                                                 "not_snapped": "; ".join(f"{k}: {v}" for k, v in sorted(why.items()))}
+        if able and done < 0.5 * len(able):
+            run.warn(f"{lvl}: к облаку привязано {done} из {len(able)} стен, где это возможно (прямые, от 0,5 м, "
+                     "с точками) - причины по стенам в snap/walls.csv")
 
 
 def cellplan_section(run: Run, e57: Path, pred: Path | None, d: Path) -> None:

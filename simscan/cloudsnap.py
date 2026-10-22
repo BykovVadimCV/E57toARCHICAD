@@ -38,7 +38,7 @@ MIN_PTS = 60
 MIN_COVER = 0.35                     # доля длины стены, покрытая точками грани
 PRIOR_M = 0.04                       # разброс грани сети относительно настоящей
 MAX_FACE_M = 0.08                    # грань дальше от грани сети - не та поверхность
-MAX_TURN_DEG = 1.5                   # и повёрнутая сильнее (сеть ошибается в направлении меньше)
+MAX_TURN_DEG = 3.0                   # и повёрнутая сильнее (на реальном скане сеть ошибалась в направлении до 2,3°)
 
 
 def _unit(v):
@@ -86,14 +86,17 @@ def level_points(chunks, plans: list[dict], cell: float = 0.02) -> list[np.ndarr
     return [np.concatenate(o).astype(np.float64) if o else np.zeros((0, 2)) for o in out]
 
 
-def _fit_face(s: np.ndarray, o: np.ndarray, L: float, expect: float):
+def _fit_face(s: np.ndarray, o: np.ndarray, L: float, expect: float, why: dict | None = None):
     """Точки одной стороны в СК стены (s - вдоль, o - от оси наружу) -> (o0 на s=0, наклон
     do/ds, rms, точек) или None.
     Слой грани: перебор наклонов до MAX_TURN_DEG (сеть могла повернуть стену - грань плывёт
     вдоль оси), для каждого - гистограмма отступов по 5 мм, взвешенная гауссом вокруг
     ожидаемой грани expect (PRIOR_M): рама окна, мебель вплотную и прочие слои проигрывают
-    плотной плоской грани. Затем прямая по точкам ближе 1 см к слою, ещё раз по уточнённой."""
+    плотной плоской грани. Затем прямая по точкам ближе 1 см к слою, ещё раз по уточнённой.
+    why (словарь) получает причину отказа: few_points, no_layer, low_cover (и долю покрытия)."""
+    why = {} if why is None else why
     if len(o) < MIN_PTS:
+        why.update(reason="few_points", points=int(len(o)))
         return None
     best = None
     for k in np.tan(np.radians(np.arange(-MAX_TURN_DEG, MAX_TURN_DEG + 1e-9, 0.1))):
@@ -113,27 +116,34 @@ def _fit_face(s: np.ndarray, o: np.ndarray, L: float, expect: float):
     sel = np.abs(o - (o0 + k * s)) < 0.01
     for _ in range(2):
         if sel.sum() < MIN_PTS:
+            why.update(reason="no_layer", points=int(len(o)))
             return None
         A = np.c_[np.ones(sel.sum()), s[sel]]
         coef, *_ = np.linalg.lstsq(A, o[sel], rcond=None)
         res = o - (coef[0] + coef[1] * s)
         sel = np.abs(res) < 0.01
     if sel.sum() < MIN_PTS:
+        why.update(reason="no_layer", points=int(len(o)))
         return None
     cov = np.histogram(s[sel], np.linspace(0, L, max(2, int(L / 0.05)) + 1))[0] > 0
     if cov.mean() < MIN_COVER:
+        why.update(reason="low_cover", cover=round(float(cov.mean()), 2))
         return None
     rms = float(np.sqrt(np.mean(res[sel] ** 2)))
     return float(coef[0]), float(coef[1]), rms, int(sel.sum())
 
 
-def snap_wall(w: dict, xy: np.ndarray, sides=(1, -1)) -> dict | None:
+def snap_wall(w: dict, xy: np.ndarray, sides=(1, -1), why: dict | None = None) -> dict | None:
     """Прямая стена {points, thickness} -> {a, b, t, sides, move, rms} по облаку или None.
     sides - стороны (по нормали оси a->b), где искать грань: у наружной - только помещение
-    (наружу толщина - по сети, как в разметке; фасад в окне - не грань)."""
+    (наружу толщина - по сети, как в разметке; фасад в окне - не грань).
+    why (словарь) получает причину отказа (reason: short, no_face, thickness, move) и по каждой
+    искавшейся стороне - причину или смещение найденной грани от грани сети (offset_cm)."""
+    why = {} if why is None else why
     a, b = np.asarray(w["points"][0], float), np.asarray(w["points"][-1], float)
     L = float(np.linalg.norm(b - a))
     if L < 2 * END_M + 0.2:
+        why["reason"] = "short"
         return None
     d = (b - a) / L
     n = np.array([-d[1], d[0]])
@@ -142,14 +152,24 @@ def snap_wall(w: dict, xy: np.ndarray, sides=(1, -1)) -> dict | None:
     s, o = r @ d, r @ n
     along = (s > END_M) & (s < L - END_M)
     faces = {}
+    why["sides"] = {}
     for sg in sides:
         m = along & (sg * o >= 0) & (sg * o <= t / 2 + WIN_M)
-        f = _fit_face(s[m], sg * o[m], L, t / 2)
+        wf: dict = {}
+        f = _fit_face(s[m], sg * o[m], L, t / 2, wf)
         # дальше от грани сети или повёрнута (ступенька толщины, мебель) - чужая поверхность
-        if f is not None and max(abs(f[0] - t / 2), abs(f[0] + f[1] * L - t / 2)) <= MAX_FACE_M \
-                and abs(f[1]) <= math.tan(math.radians(MAX_TURN_DEG)):
-            faces[sg] = f
+        if f is not None:
+            off = max(abs(f[0] - t / 2), abs(f[0] + f[1] * L - t / 2))
+            wf.update(offset_cm=round(off * 100, 1), turn_deg=round(math.degrees(math.atan(f[1])), 2))
+            if off > MAX_FACE_M:
+                wf["reason"] = "far"
+            elif abs(f[1]) > math.tan(math.radians(MAX_TURN_DEG)):
+                wf["reason"] = "turned"
+            else:
+                faces[sg] = f
+        why["sides"][sg] = wf
     if not faces:
+        why["reason"] = "no_face"
         return None
 
     def face_line(sg):                                   # грань sg: точка на s=0 и направление
@@ -168,6 +188,7 @@ def snap_wall(w: dict, xy: np.ndarray, sides=(1, -1)) -> dict | None:
         c = (p1 + p2) / 2
         t_new = abs(tn)
         if not 0.03 <= t_new <= 1.2:
+            why.update(reason="thickness", t_cm=round(t_new * 100, 1))
             return None
     else:                                                # одна грань: ближняя - облако, дальняя - сеть
         sg = next(iter(faces))
@@ -179,12 +200,14 @@ def snap_wall(w: dict, xy: np.ndarray, sides=(1, -1)) -> dict | None:
         t_new = abs(float((m_near - m_far) @ nu))
         c = (m_near + m_far) / 2
         if not 0.03 <= t_new <= 1.2:
+            why.update(reason="thickness", t_cm=round(t_new * 100, 1))
             return None
     # концы - проекция старых на новую ось
     a2 = c + u * ((a - c) @ u)
     b2 = c + u * ((b - c) @ u)
     move = max(abs((a - c) @ nu), abs((b - c) @ nu))
     if move > MAX_MOVE_M:
+        why.update(reason="move", move_cm=round(move * 100, 1))
         return None
     return {"a": a2, "b": b2, "t": t_new, "sides": len(faces), "move": move,
             "rms": max(f[2] for f in faces.values())}
@@ -284,8 +307,15 @@ def snap_plan(plan: dict, xy: np.ndarray, log=print) -> dict:
             probe = [p[0] + (p[1] - p[0]) * f for f in (0.25, 0.5, 0.75)]
             sides = tuple(sg for sg in (1, -1)
                           if any(_inside(m + n * sg * (t / 2 + 0.3), q) for m in probe for q in rooms)) or (1, -1)
-            r = snap_wall(w, xy, sides)
-            rec.update(status="no_face", searched_sides=len(sides))
+            why: dict = {}
+            r = snap_wall(w, xy, sides, why)
+            sw = why.get("sides", {})
+            rec.update(status=why.get("reason", "no_face"), searched_sides=len(sides),
+                       **{k: why[k] for k in ("t_cm", "move_cm") if k in why},
+                       **{f"side{'+' if sg > 0 else '-'}": ",".join(f"{k}={v}" for k, v in d.items())
+                          for sg, d in sw.items()})
+            if why.get("reason") == "no_face" and all(d.get("reason") == "few_points" for d in sw.values()):
+                rec["status"] = "no_points"
             if r is not None:
                 rec.update(status="snapped", faces=int(r["sides"]), move_cm=round(float(r["move"]) * 100, 2),
                            t_cloud_cm=round(float(r["t"]) * 100, 1), rms_mm=round(float(r["rms"]) * 1000, 1))
