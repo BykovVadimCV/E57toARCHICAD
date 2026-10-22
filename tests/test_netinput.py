@@ -34,7 +34,11 @@ def test_format_and_alignment(built):
     sem = cv2.imread(str(d / "sem.png"), cv2.IMREAD_UNCHANGED)
     assert sem.dtype == np.uint8 and sem.shape == x.shape[1:]
     cls = set(np.unique(sem).tolist())
-    assert {0, 1, 2, 255} <= cls and cls & {3, 4}, cls
+    assert {0, 1, 2} <= cls and cls & {3, 4}, cls
+    # границы классов размечены (без кольца ignore, датасет версии 2): стена прямо касается помещения
+    assert meta["version"] >= 2
+    touch = ((sem[:, :-1] == 2) & (sem[:, 1:] == 1)) | ((sem[:, :-1] == 1) & (sem[:, 1:] == 2))
+    assert touch.sum() > 100
     # совмещение: грани в облаке (вертикальные, занятые внизу или вверху) - на размеченных стенах
     xf = x.astype(np.float32)
     face = (xf[6] > 0.5) & ((xf[0] > 0.5) | (xf[2] > 0.5))

@@ -43,5 +43,7 @@ realism:
   unevenness_corr_m: [0.15, 0.5]   # короткие волны толщат линию стены в плане
   lean_mm_per_m: [0.0, 8.0]
   shear_deg_sigma: 1.0
+  p_angle_jitter: 0.6              # реальные дома: стены под 82-98° (скан test_3), а не только 90 ± 5°
+  angle_jitter_deg: 4.0            # наклон линии до ±4°, угол в узле 90 ± 8°
 export:
   preview: false
