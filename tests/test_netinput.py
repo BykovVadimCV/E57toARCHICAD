@@ -75,3 +75,18 @@ def test_loader_and_exact_augmentations(built):
     assert np.array_equal(r["sem"], base["sem"]) and np.allclose(r["orient"], base["orient"])
     f = _flip_x(base)
     assert np.allclose(f["orient"][1][:, ::-1], -base["orient"][1]) and np.allclose(f["orient"][0][:, ::-1], base["orient"][0])
+
+
+def test_frame_keeps_thin_edge_wall():
+    """Дальний край (прихожая и её стена) - мало точек на м² (плотность падает с дальностью) и
+    меньше 0,2 % всех: ядро по перцентилям его режет, рост по связным занятым ячейкам - нет;
+    дальний одиночный выброс кадр не расширяет."""
+    from simscan.netinput import _frame_from_points
+
+    rng = np.random.default_rng(0)
+    room = rng.uniform([0, 0], [8, 6], (1_000_000, 2))
+    edge = np.c_[rng.uniform(0, 8, 1900), rng.uniform(-0.85, 0, 1900)]           # 0,19 % точек
+    far = np.array([[30.0, 30.0], [30.05, 30.0]])
+    fr = _frame_from_points(np.vstack([room, edge, far]), 0.02)
+    assert fr["origin_y"] <= -0.85 - 0.45, fr
+    assert fr["origin_x"] + fr["width"] * 0.02 < 10, fr

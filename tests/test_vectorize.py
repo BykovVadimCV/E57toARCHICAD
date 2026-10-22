@@ -215,3 +215,35 @@ def test_niches_square_and_stray_walls_dropped(tmp_path, noisy):
             assert abs((ang + 45) % 90 - 45) < 3.0, (w["id"], p.round(2).tolist())   # всё по осям комнаты
     win = [o for o in plan["openings"] if o["opening_type"] == "window"]
     assert len(win) == 2 and all(abs(o["width"] - 0.7) < 0.15 for o in win), win
+
+
+def test_unseen_candidates():
+    """Сеть видит «помещение» там, где сканер не видел ни пола, ни потолка: не замкнутое стенами
+    до конца - не помещение (терраса за окном), замкнутое - остаётся (комната за закрытой дверью)."""
+    from simscan.vectorize import ENCLOSED_UNSEEN, MIN_ENCLOSED, room_candidates, struct_mask
+
+    def scene(open_side: bool):
+        prob = np.zeros((8, 200, 200), np.float32)
+        prob[0] = 1
+        sem = np.zeros((200, 200), np.uint8)
+        sem[40:160, 40:160] = 2
+        sem[46:154, 46:154] = 1
+        prob[:] = 0
+        for k in range(8):
+            prob[k][sem == k] = 1
+        if open_side:                                     # нижняя сторона - неуверенно (не стена, не улица)
+            prob[:, 150:170, 46:154] = 0
+            prob[0, 150:170, 46:154], prob[1, 150:170, 46:154], prob[2, 150:170, 46:154] = 0.4, 0.4, 0.2
+        return prob
+
+    for open_side in (True, False):
+        prob = scene(open_side)
+        mask = struct_mask(prob, PX)
+        lab, c = room_candidates(prob, [], mask, PX)
+        room = max(c, key=lambda r: r["area_m2"])
+        assert room["ok"] and room["seen"] is None
+        assert (MIN_ENCLOSED <= room["score"] < ENCLOSED_UNSEEN) == open_side, room["score"]
+        _, c0 = room_candidates(prob, [], mask, PX, seen=np.zeros((200, 200), bool))
+        assert max(c0, key=lambda r: r["area_m2"])["ok"] == (not open_side)
+        _, c1 = room_candidates(prob, [], mask, PX, seen=np.ones((200, 200), bool))
+        assert max(c1, key=lambda r: r["area_m2"])["ok"]
