@@ -305,6 +305,14 @@ def input_section(run: Run, r: dict, d: Path) -> dict:
     covered = (xf[[0, 1, 2, 3, 4, 5]].max(0) > 0)
     stats["covered_m2"] = round(float(covered.sum()) * float(fr["pixel_m"]) ** 2, 1)
     stats["floor_seen_of_covered"] = round(float((xf[3] > 0)[covered].mean()), 4) if covered.any() else None
+    stats["ceiling_seen_of_covered"] = round(float((xf[4] > 0)[covered].mean()), 4) if covered.any() else None
+    lv = r["level"]
+    for key, what, z in (("floor_seen_of_covered", "пол", lv["floor_z"]), ("ceiling_seen_of_covered", "потолок",
+                                                                            lv["ceiling_z"])):
+        if stats[key] is not None and stats[key] < 0.15:
+            run.warn(f"{r.get('scene', {}).get('level', 'уровень')}: {what} на отметке {z:.2f} м виден лишь на "
+                     f"{stats[key]:.0%} отснятой площади - отметка, вероятно, неверна (levels/z_hist.png); у "
+                     "прошлых реальных сканов 65-82 %")
     _write_json(d / "input.json", stats)
     plt = _plt()
     fig, axes = plt.subplots(2, 4, figsize=(16, 8.4 * x.shape[1] / max(x.shape[2], 1) + 1))

@@ -261,6 +261,11 @@ def detect_levels(points: np.ndarray, min_share: float = 0.15, min_height: float
         if ce is None:
             k += 1
             continue
+        # пол - самая плотная из плоскостей, дающих уровень с тем же потолком, а не самая нижняя:
+        # улица за стеклянной дверью или приямок на 20-30 см ниже пола (реальный скан кафе:
+        # пол 0,00, улица -0,25 - взята была улица, пол уровня «не виден» на 96 % плана)
+        alts = [q for q in merged[k:merged.index(ce)] if min_height <= ce["z"] - q["z"] <= max_height]
+        fl = max(alts, key=lambda q: q["n"])
         levels.append({"floor_z": round(fl["z"], 3), "ceiling_z": round(ce["z"], 3),
                        "height_m": round(ce["z"] - fl["z"], 3),
                        "floor_area_m2": round(fl["area"], 1)})
