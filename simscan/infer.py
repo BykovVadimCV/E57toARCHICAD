@@ -202,11 +202,14 @@ def infer_input(model, dev, x: np.ndarray, out_dir, scene: dict | None = None, t
                 plan: bool = False, batch: int = 4, log=print) -> Path:
     import cv2
 
+    from .vectorize import seen_from_input
+
     d = Path(out_dir)
     d.mkdir(parents=True, exist_ok=True)
     r = predict(model, dev, x.astype(np.float32), tile=tile, tta=tta, batch=batch)
     sem = r["prob"].argmax(0).astype(np.uint8)
     cv2.imwrite(str(d / "sem.png"), sem)
+    cv2.imwrite(str(d / "seen.png"), (seen_from_input(x) * 255).astype(np.uint8))   # видны пол или потолок
     np.savez_compressed(d / "prob.npz", prob=r["prob"].astype(np.float16))
     for k in ("dist", "orient", "heights"):
         if k in r:

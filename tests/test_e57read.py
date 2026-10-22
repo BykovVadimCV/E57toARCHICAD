@@ -105,3 +105,19 @@ def test_detect_levels_two_storeys():
     assert len(lv) == 2
     assert abs(lv[0]["floor_z"]) < 0.03 and abs(lv[0]["ceiling_z"] - 2.7) < 0.03
     assert abs(lv[1]["floor_z"] - 2.94) < 0.03 and abs(lv[1]["ceiling_z"] - 5.7) < 0.03
+
+
+def test_detect_levels_floor_is_densest_not_lowest():
+    """Кафе на первом этаже: улица за стеклянной дверью на 25 см ниже пола попадает в число
+    плоскостей и тоже даёт уровень с тем же потолком - пол всё равно настоящий (плотнее)."""
+    from simscan.rasterize import detect_levels
+
+    rng = np.random.default_rng(1)
+
+    def plane(z, x0, x1, n):
+        return np.c_[rng.uniform(x0, x1, n), rng.uniform(0, 8, n), z + rng.normal(0, 0.002, n)]
+
+    walls = np.c_[rng.uniform(0, 10, 40_000), rng.choice([0.0, 8.0], 40_000), rng.uniform(0, 2.63, 40_000)]
+    pts = np.vstack([plane(-0.25, -6, 0, 9_000), plane(0.0, 0, 10, 40_000), plane(2.63, 0, 10, 35_000), walls])
+    lv = detect_levels(pts)
+    assert len(lv) == 1 and abs(lv[0]["floor_z"]) < 0.03 and abs(lv[0]["ceiling_z"] - 2.63) < 0.03, lv

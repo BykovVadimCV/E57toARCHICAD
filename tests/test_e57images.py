@@ -131,3 +131,18 @@ def test_spherical_rotated(tmp_path):
     doc = extract(src, out, pano_width=1024, log=lambda *a: None)
     assert doc["cameras"][0]["representation"] == "spherical" and doc["pinhole_convention"] == {}
     assert _pano_error(out, 1024) < 12.0
+
+
+def test_collapsed_poses_split_by_name():
+    """Экспорт с одной позой у всех снимков: стоянки - по именам (по 6 граней); уникальные
+    имена граней одной стоянки - одна группа."""
+    from types import SimpleNamespace
+
+    from simscan.e57images import poses_collapsed, stations
+
+    cam = SimpleNamespace(center=np.array([1.0, 2.0, 1.5]))
+    ims = [SimpleNamespace(index=i, name=f"guid-{i // 6}", camera=cam) for i in range(18)]
+    g = stations(ims)
+    assert g == [list(range(0, 6)), list(range(6, 12)), list(range(12, 18))] and poses_collapsed(ims, g)
+    ims = [SimpleNamespace(index=i, name=f"Setup face {i}", camera=cam) for i in range(6)]
+    assert stations(ims) == [list(range(6))] and not poses_collapsed(ims, stations(ims))

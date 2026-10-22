@@ -227,8 +227,12 @@ def decode(data: bytes) -> np.ndarray:
 
 
 def stations(images: list[Image2D], tol_m: float = 0.05) -> list[list[int]]:
-    """Снимки -> группы по положению камеры (грани куба одной стоянки - одна группа)."""
+    """Снимки -> группы по положению камеры (грани куба одной стоянки - одна группа). Бывают
+    экспорты, где у всех снимков одна поза (поза облака, не стоянки), а стоянка - в имени
+    (Cyclone: имя = GUID стоянки, по 6 граней): такая группа делится по именам, если имена
+    повторяются (каждое - не меньше чем у 2 снимков)."""
     groups, centers = [], []
+    by_index = {im.index: im for im in images}
     for im in images:
         if im.camera is None:
             continue
@@ -240,7 +244,23 @@ def stations(images: list[Image2D], tol_m: float = 0.05) -> list[list[int]]:
         else:
             groups.append([im.index])
             centers.append(c)
-    return groups
+    out = []
+    for g in groups:
+        names: dict[str, list[int]] = {}
+        for i in g:
+            names.setdefault(by_index[i].name, []).append(i)
+        if len(names) > 1 and all(len(v) >= 2 for v in names.values()):
+            out += list(names.values())
+        else:
+            out.append(g)
+    return out
+
+
+def poses_collapsed(images: list[Image2D], groups: list[list[int]], tol_m: float = 0.05) -> bool:
+    """Несколько стоянок с одним положением: центры стоянок в cameras.json - не их места."""
+    by_index = {im.index: im for im in images}
+    c = np.array([by_index[g[0]].camera.center for g in groups]) if groups else np.zeros((0, 3))
+    return len(c) > 1 and float(np.ptp(c, axis=0).max()) <= tol_m
 
 
 # ----------------------------------------------------------------------
@@ -401,7 +421,7 @@ def extract(e57, out_dir, panoramas: bool = True, pano_width: int | None = None,
                 cv2.imwrite(str(out / fn), pano[:, :, ::-1], [cv2.IMWRITE_JPEG_QUALITY, 92])
                 rec.update({"panorama": fn, "width": W, "height": W // 2})
             st_doc.append(rec)
-        doc = {"file": Path(e57).name, "pinhole_convention": conv,
+        doc = {"file": Path(e57).name, "pinhole_convention": conv, "station_centers_reliable": not poses_collapsed(ims, groups),
                "panorama_projection": "equirectangular, world axes: azimuth = (W/2 - u) * 2pi/W (0 = world +X at "
                                       "centre, counter-clockwise to the left), elevation = (H/2 - v) * pi/H; "
                                       "ray = (cos e cos a, cos e sin a, sin e) from station centre",

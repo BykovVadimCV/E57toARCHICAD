@@ -83,14 +83,44 @@ def meta_doc() -> dict:
 # Вход: облако -> 8 каналов
 # ----------------------------------------------------------------------
 
-def _frame_from_points(xy: np.ndarray, px: float, pad_m: float = 0.5) -> dict:
-    lo = np.percentile(xy, 0.2, axis=0) - pad_m
-    hi = np.percentile(xy, 99.8, axis=0) + pad_m
+def _frame_from_points(xy: np.ndarray, px: float, pad_m: float = 0.5, grow_m: float = 2.0,
+                       cell_m: float = 0.1) -> dict:
+    """Кадр уровня: ядро - 0,2-99,8 % точек (одиночные выбросы - вон); дальше - до grow_m по
+    занятым ячейкам cell_m, связным с ядром (тонкая стена у края с долей точек меньше 0,2 % -
+    не обрезается); плюс pad_m."""
+    lo = np.percentile(xy, 0.2, axis=0)
+    hi = np.percentile(xy, 99.8, axis=0)
+    lo, hi = _grow_box(xy, lo, hi, grow_m, cell_m)
+    lo, hi = lo - pad_m, hi + pad_m
     ox = math.floor(lo[0] / px) * px
     oy = math.floor(lo[1] / px) * px
     W = int(math.ceil((hi[0] - ox) / px))
     H = int(math.ceil((hi[1] - oy) / px))
     return {"origin_x": round(ox, 6), "origin_y": round(oy, 6), "pixel_m": px, "width": W, "height": H}
+
+
+def _grow_box(xy: np.ndarray, lo, hi, grow_m: float, cell_m: float):
+    """Рамка [lo, hi] -> расширенная по ячейкам (от 2 точек), связным с ячейками внутри рамки."""
+    import cv2
+
+    a, b = lo - grow_m, hi + grow_m
+    q = xy[(xy[:, 0] >= a[0]) & (xy[:, 0] < b[0]) & (xy[:, 1] >= a[1]) & (xy[:, 1] < b[1])]
+    if len(q) < 100:
+        return lo, hi
+    n = np.ceil((b - a) / cell_m).astype(int) + 1
+    ij = np.floor((q - a) / cell_m).astype(int)
+    cnt = np.bincount(ij[:, 1] * n[0] + ij[:, 0], minlength=n[0] * n[1]).reshape(n[1], n[0])
+    occ = (cnt >= 2).astype(np.uint8)
+    k, lab = cv2.connectedComponents(occ, connectivity=8)
+    c0, c1 = np.floor((lo - a) / cell_m).astype(int), np.floor((hi - a) / cell_m).astype(int)
+    core = np.unique(lab[c0[1]:c1[1] + 1, c0[0]:c1[0] + 1])
+    keep = np.isin(lab, core[core > 0])
+    if not keep.any():
+        return lo, hi
+    ys, xs = np.nonzero(keep)
+    lo2 = a + np.array([xs.min(), ys.min()]) * cell_m
+    hi2 = a + np.array([xs.max() + 1, ys.max() + 1]) * cell_m
+    return np.minimum(lo, lo2), np.maximum(hi, hi2)
 
 
 def affine(frame: dict) -> list:

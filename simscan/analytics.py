@@ -243,7 +243,7 @@ def levels_section(run: Run, sample: Path, levels: list[dict], d: Path) -> None:
 
 def images_section(run: Run, e57: Path, d: Path, panoramas: bool) -> None:
     """Параметры и позы снимков; панорамы стоянок - только по флагу (это фото объекта)."""
-    from .e57images import extract, read_images, seam_check, stations
+    from .e57images import extract, poses_collapsed, read_images, seam_check, stations
     from .e57read import E57Reader
 
     d.mkdir(parents=True, exist_ok=True)
@@ -270,7 +270,8 @@ def images_section(run: Run, e57: Path, d: Path, panoramas: bool) -> None:
                     for im in ims if im.camera is not None]
             st = [{"station": s + 1, "center": np.round(ims[g[0]].camera.center, 4).tolist(), "images": g}
                   for s, g in enumerate(groups) if ims[g[0]].camera is not None]
-        doc = {"file": e57.name, "pinhole_convention": conv, "stations": st, "cameras": cams}
+        doc = {"file": e57.name, "pinhole_convention": conv, "station_centers_reliable": not poses_collapsed(ims, groups),
+               "stations": st, "cameras": cams}
     _write_json(d / "cameras.json", doc)
     kinds = {}
     for c in doc["cameras"]:
@@ -278,6 +279,10 @@ def images_section(run: Run, e57: Path, d: Path, panoramas: bool) -> None:
     conv = doc.get("pinhole_convention") or {}
     run.facts["images"] = {"cameras": len(doc["cameras"]), "kinds": kinds, "stations": len(doc["stations"]),
                            "pinhole_convention": conv.get("conv"), "convention_sure": conv.get("sure")}
+    if doc["stations"] and not doc.get("station_centers_reliable", True):
+        run.warn("у всех снимков одна поза (стоянки различимы только по именам): положения стоянок в файле "
+                 "нет - панорамы верны, но их центры в cameras.json не места съёмки")
+    run.facts["images"]["station_centers_reliable"] = doc.get("station_centers_reliable")
     if kinds.get("pinhole") and conv and not conv.get("sure"):
         run.warn("соглашение осей граней куба не определилось по швам - панорамы могут быть перевёрнуты")
 
@@ -300,6 +305,14 @@ def input_section(run: Run, r: dict, d: Path) -> dict:
     covered = (xf[[0, 1, 2, 3, 4, 5]].max(0) > 0)
     stats["covered_m2"] = round(float(covered.sum()) * float(fr["pixel_m"]) ** 2, 1)
     stats["floor_seen_of_covered"] = round(float((xf[3] > 0)[covered].mean()), 4) if covered.any() else None
+    stats["ceiling_seen_of_covered"] = round(float((xf[4] > 0)[covered].mean()), 4) if covered.any() else None
+    lv = r["level"]
+    for key, what, z in (("floor_seen_of_covered", "пол", lv["floor_z"]), ("ceiling_seen_of_covered", "потолок",
+                                                                            lv["ceiling_z"])):
+        if stats[key] is not None and stats[key] < 0.15:
+            run.warn(f"{r.get('scene', {}).get('level', 'уровень')}: {what} на отметке {z:.2f} м виден лишь на "
+                     f"{stats[key]:.0%} отснятой площади - отметка, вероятно, неверна (levels/z_hist.png); у "
+                     "прошлых реальных сканов 65-82 %")
     _write_json(d / "input.json", stats)
     plt = _plt()
     fig, axes = plt.subplots(2, 4, figsize=(16, 8.4 * x.shape[1] / max(x.shape[2], 1) + 1))
@@ -425,8 +438,15 @@ def vectorize_section(run: Run, lvl: str, net_dir: Path, d: Path) -> dict:
 
     d.mkdir(parents=True, exist_ok=True)
     prob, orient, heights, scene = V._load(net_dir)
+    seen = V.load_seen(net_dir)
+    inp = d.parent / "input.npz"
+    if seen is None and inp.exists():                      # старые предсказания (--pred) - маска по своему входу
+        x = np.load(inp)["input"]
+        seen = V.seen_from_input(x) if x.shape[1:] == prob.shape[1:] else None
+    if seen is not None and seen.shape != prob.shape[1:]:
+        seen = None
     trace: dict = {}
-    plan = V.vectorize_arrays(prob, orient, heights, scene, log=run.log, trace=trace)
+    plan = V.vectorize_arrays(prob, orient, heights, scene, log=run.log, trace=trace, seen=seen)
     V.save_json(plan, d / "plan.json")
     V.save_png(plan, d / "plan.png")
     V.save_svg(plan, d / "plan.svg")
@@ -436,8 +456,12 @@ def vectorize_section(run: Run, lvl: str, net_dir: Path, d: Path) -> dict:
         c["centre_xy"] = np.round(M @ [*c["centre"], 1.0], 3).tolist()
         c["verdict"] = ("принят" if c["ok"] else
                         f"мал (< {V.MIN_ROOM_M2} м²)" if c["area_m2"] < V.MIN_ROOM_M2 else
-                        f"не замкнут: стены {c['walls']:.2f} - улица {c['street']:.2f} < {V.MIN_ENCLOSED}")
+                        f"не замкнут: стены {c['walls']:.2f} - улица {c['street']:.2f} < {V.MIN_ENCLOSED}"
+                        if c["score"] < V.MIN_ENCLOSED else
+                        f"не увиден сканером (доля {c['seen']:.2f} < {V.MIN_SEEN}) и не замкнут полностью "
+                        f"(счёт {c['score']:.2f} < {V.ENCLOSED_UNSEEN})")
     _write_json(d / "candidates.json", {"min_enclosed": V.MIN_ENCLOSED, "min_room_m2": V.MIN_ROOM_M2,
+                                        "min_seen": V.MIN_SEEN, "enclosed_unseen": V.ENCLOSED_UNSEEN,
                                         "candidates": cands})
     if "candidate_labels" in trace:
         _candidates_png(trace["candidate_labels"], cands, d / "candidates.png")
@@ -473,6 +497,11 @@ def vectorize_section(run: Run, lvl: str, net_dir: Path, d: Path) -> dict:
         "weak_walls": len(weak)}
     if not plan["rooms"]:
         run.warn(f"{lvl}: векторизатор не нашёл ни одного помещения")
+    blind = [r for r in plan["rooms"] if r.get("observed") is not None and r["observed"] < V.MIN_SEEN]
+    run.facts["vectorize"][lvl]["unobserved_rooms"] = len(blind)
+    for r in blind:
+        run.warn(f"{lvl}: {r['id']} ({r['area']} м²) внутри не отснято - замкнуто стенами, видимыми снаружи "
+                 "(закрытая дверь?); контур - по сети")
     for c in near:
         run.warn(f"{lvl}: кандидат {c['label']} ({c['area_m2']} м², счёт {c['score']}) отклонён у самого порога "
                  f"{V.MIN_ENCLOSED} - смотри vectorize/candidates.png")
