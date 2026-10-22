@@ -65,3 +65,57 @@ def test_snap_recovers_walls():
     areas = sorted(r["area"] for r in out["rooms"])
     assert abs(areas[1] - 3.94 * 3.0) < 0.05, areas
     assert out["metadata"]["snap"]["two_faces"] == 1
+
+
+def _plan(walls, rooms, openings=()):
+    return {"level": "L1", "floor_z": 0.0, "ceiling_z": 2.7,
+            "walls": [{"id": i, "points": [list(map(float, q)) for q in p], "thickness": t, "is_outer": False,
+                       "rooms": [], "length": 1.0} for i, p, t in walls],
+            "openings": list(openings),
+            "rooms": [{"id": f"R{k}", "name": str(k), "points": r, "area": 1.0, "perimeter": 1.0}
+                      for k, r in enumerate(rooms)]}
+
+
+def test_chain_straightened_when_cloud_is_straight():
+    """Прямая перегородка (грани y = ±0,06) у сети - два куска с изломом ~1° и ломаная с изломом
+    1,5° через окно: обе цепочки -> прямые по облаку, окно - на прямой стене. Излом 3° (вершина в
+    16 см от прямой, больше полутолщины) - тоже прямая и на той грани, не на противоположной."""
+    xy = np.vstack([_face([0, 0.06], [6, 0.06]), _face([0, -0.06], [6, -0.06]),
+                    _face([0, 3.06], [2.0, 3.06]), _face([4.0, 3.06], [6, 3.06]),     # окно 2-4 м
+                    _face([0, 2.94], [6, 2.94])])
+    kink = 3.0 * np.tan(np.radians(1.5))
+    plan = _plan([("A", [[0, 0.0], [3, 0.03]], 0.12), ("B", [[3, 0.03], [6, -0.02]], 0.12),
+                  ("C", [[0, 3.0], [3, 3.0 + kink], [6, 3.0]], 0.12)],
+                 [[[0, 0.06], [6, 0.06], [6, 2.94], [0, 2.94]], [[0, -0.06], [6, -0.06], [6, -2], [0, -2]],
+                  [[0, 3.06], [6, 3.06], [6, 5], [0, 5]]],
+                 [{"id": "O1", "opening_type": "window", "wall_id": "C", "a": [2.0, 3.0 + kink * 2 / 3],
+                   "b": [4.0, 3.0 + kink * 2 / 3], "width": 2.0, "sill": 0.9, "head": 2.1}])
+    out = snap_plan(plan, xy, log=lambda *a: None)
+    W = {w["id"]: np.asarray(w["points"]) for w in out["walls"]}
+    for wid in ("A", "B"):
+        assert np.abs(W[wid][:, 1]).max() < 0.005, (wid, W[wid])
+    assert len(W["C"]) == 2 and np.abs(W["C"][:, 1] - 3.0).max() < 0.005, W["C"]
+    o = out["openings"][0]
+    assert abs(o["a"][1] - 3.0) < 0.005 and abs(o["width"] - 2.0) < 0.02, o
+    assert out["metadata"]["snap"]["chains_straightened"] == 2
+    big = 3.0 * np.tan(np.radians(3.0))
+    plan["walls"][2]["points"] = [[0, 3.0], [3, 3.0 + big], [6, 3.0]]
+    out = snap_plan(plan, xy, log=lambda *a: None)
+    C = np.asarray(next(w for w in out["walls"] if w["id"] == "C")["points"])
+    assert len(C) == 2 and np.abs(C[:, 1] - 3.0).max() < 0.005, C
+
+
+def test_real_kink_kept():
+    """Наружная стена с настоящим изломом 14° (окно через излом): у куска своя грань -
+    цепочка не выпрямляется, ломаная остаётся ломаной."""
+    J = np.array([3.0, 0.0])
+    b = J + 3.0 * np.array([np.cos(np.radians(14)), np.sin(np.radians(14))])
+    n2 = np.array([-np.sin(np.radians(14)), np.cos(np.radians(14))])
+    xy = np.vstack([_face([0, 0.05], J + [0, 0.05]), _face(J + n2 * 0.05, b + n2 * 0.05)])
+    plan = _plan([("K", [[0, 0.0], J.tolist(), b.tolist()], 0.1)],
+                 [[[0, 0.05], (J + [0, 0.05]).tolist(), (b + n2 * 0.05).tolist(), [6, 3], [0, 3]]])
+    out = snap_plan(plan, xy, log=lambda *a: None)
+    k = next(w for w in out["walls"] if w["id"] == "K")
+    assert len(k["points"]) == 3
+    rec = out["metadata"]["snap"]["per_wall"][0]
+    assert rec.get("chain_reason") in ("kink", "bent", "no_face"), rec
