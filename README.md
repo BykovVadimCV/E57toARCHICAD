@@ -392,6 +392,11 @@ python -m simscan dataset splits dataset
 # обучение (нужен torch; на Colab - notebooks/colab_train.ipynb)
 python -m simscan train --data dataset --out runs/r1 --epochs 60 --batch 8 [--resume]
 
+# best.pt выбирается по плану: каждые --vec-every эпох (по умолчанию 5) сеть строит план на --vec-levels
+# уровнях val (48), vector_metrics сверяет с эталоном, счёт: стены 0,5 (F1 осей x точность оси x дробление),
+# двери 0,3, окна 0,2 (F1 x ошибка ширины); best_pixel.pt - по прежнему mIoU. Больше эпох при --resume -
+# новое расписание на оставшиеся; --init best.pt - новый прогон с весов готовой модели (дообучение)
+
 # опции обучения:
 python -m simscan train --data dataset --out runs/r2 --epochs 60 --batch 8 \
     --weighted-sampling \        # чаще кропы с дверями и окнами

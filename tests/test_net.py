@@ -54,6 +54,17 @@ def test_train_tiny_dataset(tmp_path):
     (sp / "train.txt").write_text("\n".join(names[:-1]) + "\n")       # val не пуст при любом разбиении
     (sp / "val.txt").write_text(names[-1] + "\n")
     r = train(tmp_path / "ds", tmp_path / "run", epochs=1, batch=2, crop=128, workers=0, log=lambda *a: None)
-    assert (tmp_path / "run" / "best.pt").exists() and (tmp_path / "run" / "last.pt").exists()
+    for f in ("best.pt", "best_pixel.pt", "last.pt"):                 # best.pt - по плану, best_pixel.pt - по mIoU
+        assert (tmp_path / "run" / f).exists(), f
     h = [json.loads(x) for x in (tmp_path / "run" / "history.jsonl").read_text().splitlines()]
     assert len(h) == 1 and "miou_walls" in h[0] and r["best"] >= 0
+    assert "vec_geo_score" in h[0] and r["best_geo"] >= 0
+    # продолжение с большим числом эпох: расписание пройдено - новое, без падения
+    train(tmp_path / "ds", tmp_path / "run", epochs=2, batch=2, crop=128, workers=0, resume=True,
+          log=lambda *a: None)
+    h = [json.loads(x) for x in (tmp_path / "run" / "history.jsonl").read_text().splitlines()]
+    assert [x["epoch"] for x in h] == [0, 1]
+    # дообучение: новый прогон с весов best.pt
+    train(tmp_path / "ds", tmp_path / "ft", epochs=1, batch=2, crop=128, workers=0, init=tmp_path / "run" / "best.pt",
+          vec_every=0, log=lambda *a: None)
+    assert (tmp_path / "ft" / "best.pt").exists() and not (tmp_path / "ft" / "best_pixel.pt").exists()

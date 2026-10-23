@@ -377,7 +377,27 @@ def _err_rgb(sem, pred):
 VEC_KEYS = ("axis_recall", "axis_precision", "axis_f1", "angle_err_deg_median", "thickness_err_cm_median",
             "axis_err_cm_median", "axis_err_cm_p90",
             "pieces_per_gt_wall", "axis_offset_cm_p90", "dangling_ends_per_gt_wall", "standalone_walls",
-            "openings_f1", "opening_width_err_cm", "room_iou_mean")
+            "openings_f1", "opening_width_err_cm", "room_iou_mean",
+            "door_f1", "door_width_err_cm", "window_f1", "window_width_err_cm")
+
+
+def geo_score(agg: dict) -> float:
+    """Одно число для выбора модели по плану, приоритеты - стены, двери, окна (0,5 / 0,3 / 0,2):
+      стены = полнота-точность осей x (1 - p90 ошибки оси / 10 см) / дробление (кусков на стену);
+      двери, окна = F1 найденных x (1 - ошибка ширины / 20 см).
+    Нет дверей или окон в выборке - их вес переходит стенам. 0..1, больше - лучше."""
+    def q(v, default=0.0):
+        return default if v is None else float(v)
+
+    walls = q(agg.get("axis_f1")) * max(0.0, 1 - q(agg.get("axis_err_cm_p90"), 10) / 10) \
+        / max(1.0, q(agg.get("pieces_per_gt_wall"), 1))
+    parts = [(0.5, walls)]
+    for w, kind in ((0.3, "door"), (0.2, "window")):
+        if agg.get(f"{kind}_f1") is None:
+            parts[0] = (parts[0][0] + w, walls)
+            continue
+        parts.append((w, q(agg[f"{kind}_f1"]) * max(0.0, 1 - q(agg.get(f"{kind}_width_err_cm"), 20) / 20)))
+    return round(sum(w * v for w, v in parts), 4)
 
 
 def aggregate_vector(rows: list[dict]) -> dict:
@@ -840,6 +860,7 @@ def vector_metrics(plan: dict, gt_vec: dict, tol: float = VEC_TOL_M) -> dict:
            "width": float(o.get("width") or np.linalg.norm(np.subtract(o["a"], o["b"])))}
           for o in plan.get("openings", [])]
     used, tp, werr = set(), 0, []
+    by_type: dict = {}
     for g in go:
         cand = [(np.linalg.norm(p["c"] - g["c"]), j) for j, p in enumerate(po)
                 if j not in used and p["type"] == g["type"]]
@@ -849,9 +870,16 @@ def vector_metrics(plan: dict, gt_vec: dict, tol: float = VEC_TOL_M) -> dict:
                 used.add(j)
                 tp += 1
                 werr.append(abs(po[j]["width"] - g["width"]) * 100)
+                by_type.setdefault(g["type"], []).append(werr[-1])
     res.update({"openings_gt": len(go), "openings_pred": len(po), "openings_found": tp,
                 "openings_f1": _r(_f1(tp / max(len(po), 1), tp / max(len(go), 1))) if go or po else None,
                 "opening_width_err_cm": _r(np.median(werr), 1) if werr else None})
+    for kind in ("door", "window"):                       # отдельно: у дверей и окон разный приоритет
+        ng = sum(g["type"] == kind for g in go)
+        npr = sum(p["type"] == kind for p in po)
+        t_ = len(by_type.get(kind, []))
+        res[f"{kind}_f1"] = _r(_f1(t_ / max(npr, 1), t_ / max(ng, 1))) if ng or npr else None
+        res[f"{kind}_width_err_cm"] = _r(np.median(by_type[kind]), 1) if by_type.get(kind) else None
     # помещения
     ious, extra = _room_iou([r["polygon"] for r in gt_vec.get("rooms", [])],
                             [r["points"] for r in plan.get("rooms", [])])
