@@ -145,7 +145,9 @@ class ScannerConfig:
     wall_clearance_m: float = 0.5
     stations_per_m2: float = 1.0 / 18.0
     max_stations_per_room: int = 3
-    p_room_unscanned: float = 0.05      # закрытое неотсканированное помещение
+    p_room_unscanned: float = 0.05      # закрытое неотсканированное помещение...
+    unscanned_kinds: tuple[str, ...] = ("corridor",)   # ...только такого вида: комнаты, кухню, санузел снимают всегда
+    min_clearance_m: float = 0.12       # тесное помещение (санузел): не меньше столько до стен и сантехники
     tilt_sigma_deg: float = 0.0         # остаточный наклон после компенсатора
     chunk_rays: int = 2_000_000
 

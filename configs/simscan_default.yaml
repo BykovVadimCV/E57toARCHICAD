@@ -168,6 +168,9 @@ scanner:
   stations_per_m2: 0.05555555555555555
   max_stations_per_room: 3
   p_room_unscanned: 0.05
+  unscanned_kinds:
+  - corridor
+  min_clearance_m: 0.12
   tilt_sigma_deg: 0.0
   chunk_rays: 2000000
 effects:
