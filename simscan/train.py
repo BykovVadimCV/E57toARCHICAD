@@ -83,6 +83,17 @@ def evaluate(model, loader, dev, amp: bool = True) -> dict:
     return res
 
 
+def _save(obj, path: Path) -> None:
+    """torch.save через временный файл и переименование: обрыв не оставит битый или пустой файл."""
+    import os
+
+    import torch
+
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(obj, tmp)
+    os.replace(tmp, path)
+
+
 def vector_eval(model, dev, data, ids: list[str], tile: int = 512) -> dict:
     """Уровни val целиком -> сеть -> vectorize -> vector_metrics против vector.json; средние и
     geo_score. Упавший уровень - нулевые метрики (план не построился)."""
@@ -147,6 +158,11 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
         opt.load_state_dict(ck["opt"])
         scaler.load_state_dict(ck["scaler"])
         start, best, best_geo = ck["epoch"] + 1, ck["best"], ck.get("best_geo", -1.0)
+        # лучших весов на диске нет (потерялись при обрыве) - рекорд не в счёт, следующая проверка их запишет
+        if not (out / "best.pt").exists():
+            best_geo = -1.0
+        if not (out / ("best_pixel.pt" if vec_every > 0 else "best.pt")).exists():
+            best = -1.0
         if ck["sched"].get("total_steps") == steps:
             sched.load_state_dict(ck["sched"])
         else:                                          # другое число эпох или другой датасет
@@ -215,19 +231,20 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
         score = rec.get("miou_walls", -rec["total"])
         net_cfg = {"in_channels": 8, "n_classes": 8, "width": 64}
         geo = rec.get("vec_geo_score")
-        ck = {"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
-              "scaler": scaler.state_dict(), "epoch": ep, "best": max(best, score), "meta": meta, "net": net_cfg,
-              "best_geo": max(best_geo, geo) if geo is not None else best_geo}
-        torch.save(ck, out / "last.pt")
+        # сначала лучшие, потом last.pt: обрыв между ними (Colab) не оставит в last.pt рекорд без его best.pt
         snap = {"model": model.state_dict(), "meta": meta, "net": net_cfg, "epoch": ep, "score": score,
                 "geo_score": geo}
         if score > best:
             best = score
-            torch.save(snap, out / ("best_pixel.pt" if vec_ids else "best.pt"))
+            _save(snap, out / ("best_pixel.pt" if vec_ids else "best.pt"))
         if geo is not None and geo > best_geo:
             best_geo = geo
-            torch.save(snap, out / "best.pt")
+            _save(snap, out / "best.pt")
             log(f"  best.pt <- эпоха {ep} (счёт плана {geo:.3f})")
+        ck = {"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
+              "scaler": scaler.state_dict(), "epoch": ep, "best": best, "meta": meta, "net": net_cfg,
+              "best_geo": best_geo}
+        _save(ck, out / "last.pt")
         with open(out / "history.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         log(f"эпоха {ep}: loss {rec['total']:.3f}" + (f", val mIoU стен {rec['miou_walls']:.3f}"
