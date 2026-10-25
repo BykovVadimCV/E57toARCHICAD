@@ -28,3 +28,24 @@ def test_ignore_unseen():
     assert (out[42:48, 104:108] == INTERIOR).all()             # видимое место комнаты 2 - осталось
     assert (out[5:10, 160:190] == IGNORE).all()                # стена комнаты 2 без точек - ignore
     assert (out[5:10, 20:80] == WALL).all()                    # дальняя от комнаты 2 стена - нет
+
+
+def test_room_without_station_ignored_beyond_seen():
+    """Комната без стоянки, видная через дверь на треть: видимое размечено, остальное - ignore."""
+    H, W = 100, 200
+    sem = np.zeros((H, W), np.uint8)
+    rid = np.zeros((H, W), np.uint16)
+    sem[10:90, 10:190] = INTERIOR
+    rid[10:90, 10:97], rid[10:90, 103:190] = 1, 2
+    sem[10:90, 97:103] = WALL
+    inp = np.zeros((8, H, W), np.float32)
+    inp[3][10:90, 10:97] = 1
+    inp[3][10:90, 103:135] = 1                                 # треть комнаты 2 видна - больше min_seen
+    lab = {"sem": sem.copy(), "sem_raw": sem.copy(), "room_id": rid}
+    assert ignore_unseen(lab, inp, PX) == 0                    # со стоянкой: размечено целиком
+    lab = {"sem": sem.copy(), "sem_raw": sem.copy(), "room_id": rid}
+    assert ignore_unseen(lab, inp, PX, no_station=[2]) > 0
+    out = lab["sem"]
+    assert (out[10:90, 10:97] == INTERIOR).all()
+    assert (out[15:85, 105:135] == INTERIOR).all()             # видимая часть
+    assert (out[15:85, 160:185] == IGNORE).all()               # невидимая глубина

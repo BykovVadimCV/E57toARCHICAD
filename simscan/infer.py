@@ -147,6 +147,7 @@ def _predict_single(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 1
     import torch
 
     C, H, W = x.shape
+    overlap = min(overlap, tile // 4)                      # при малом окне шаг не обнуляется (512 -> 128 как было)
     Hp, Wp = max(H, tile), max(W, tile)
     xp = np.zeros((C, Hp, Wp), np.float32)
     xp[:, :H, :W] = x

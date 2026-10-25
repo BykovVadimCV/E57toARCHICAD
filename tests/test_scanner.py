@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 
 from simscan.config import load_config
@@ -96,3 +98,31 @@ def test_people_differ_between_stations():
     a = people_for_station(stations[0], grids, 2, rng, 100)
     b = people_for_station(stations[1], grids, 2, rng, 200)
     assert a and b and a[0].box.center != b[0].box.center
+
+
+def test_every_room_but_corridor_gets_a_station():
+    """Комнаты, кухню, санузел (тесный: ванна, унитаз, раковина) снимают всегда; пропустить
+    можно только коридор: иначе разметка требует дорисовать помещение, которого нет в облаке."""
+    from simscan.generate import make_layout, scene_rng
+
+    cfg = load_config(Path(__file__).parents[1] / "configs" / "customer_like.yaml",
+                      overrides={"scanner": {"p_room_unscanned": 1.0}})
+    rooms = baths = 0
+    for i in range(12):
+        rng = scene_rng(3, i)
+        try:
+            lay = make_layout(cfg, rng, 3, i)
+        except Exception:                                    # планировка не построилась - другая сцена
+            continue
+        grids = Furnisher(cfg.interior, rng).furnish(lay)
+        st = place_stations(lay, grids, cfg.scanner, rng)
+        have = {s.room_id for s in st}
+        for r in lay.rooms:
+            assert (r.id in have) == r.scanned
+            if r.kind == "corridor" and len(lay.rooms) > 1:
+                assert not r.scanned                          # p_room_unscanned = 1
+            else:
+                assert r.scanned, (i, r.kind, round(r.area, 1))
+                rooms += 1
+                baths += r.kind == "bath"
+    assert rooms > 30 and baths > 5

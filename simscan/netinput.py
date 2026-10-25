@@ -34,7 +34,8 @@ from pathlib import Path
 import numpy as np
 
 RASTERIZER_VERSION = "netinput-1"
-LABELS_VERSION = "labels-2"           # labels-2: неотсканированные помещения - ignore (ignore_unseen)
+LABELS_VERSION = "labels-3"           # labels-2: неотсканированные помещения - ignore (ignore_unseen);
+                                      # labels-3: и любое помещение без стоянки - вне видимого
 PIXEL_M = 0.02
 Z_BIN_M = 0.05                       # срез для долей занятости и вертикальности
 BAND_MARGIN_M = 0.1                  # от пола и потолка
@@ -67,7 +68,7 @@ CLUTTER_SKIP_KINDS = ("baseboard",)  # плинтус - часть грани, �
 def meta_doc() -> dict:
     from . import __version__
 
-    return {"version": 1, "rasterizer": RASTERIZER_VERSION, "generator": __version__,
+    return {"version": 2, "rasterizer": RASTERIZER_VERSION, "generator": __version__,
             "pixel_m": PIXEL_M, "z_bin_m": Z_BIN_M, "bands_m": [BAND_MARGIN_M, LOW_TOP, MID_TOP],
             "channels": CHANNELS, "classes": {str(k): v for k, v in CLASSES.items()},
             "dist": {"max_m": DIST_MAX_M, "norm": "расстояние до ближайшей видимой грани стены / 0,3, обрезка до 1"},
@@ -76,22 +77,25 @@ def meta_doc() -> dict:
             "heights": "(низ проёма, верх проёма) / высота потолка; только на классах 3-5, иначе 0",
             "raster": "x = origin_x + (j + 0.5) * px; y = origin_y + (H - 1 - i + 0.5) * px (мировая СК облака)",
             "exterior_wall": f"полоса {EXTERIOR_BAND_M} м наружу от внутренней грани; истинная толщина - в vector.json",
-            "ignore": "кольцо в 1 пиксель по границам классов (сторона с большим номером класса)"}
+            "ignore": "только неотснятое (ignore_unseen: помещение без стоянки или почти невидимое - вне видимого); границы классов размечены по центру пикселя "
+                      "(в версии 1 - кольцо ignore в 1 пиксель)",
+            "frame_pad_m": "датасет: пустые поля 0,5-2,5 м с каждой стороны, случайно (вход для реальных - 0,5 м)"}
 
 
 # ----------------------------------------------------------------------
 # Вход: облако -> 8 каналов
 # ----------------------------------------------------------------------
 
-def _frame_from_points(xy: np.ndarray, px: float, pad_m: float = 0.5, grow_m: float = 2.0,
+def _frame_from_points(xy: np.ndarray, px: float, pad_m=0.5, grow_m: float = 2.0,
                        cell_m: float = 0.1) -> dict:
     """Кадр уровня: ядро - 0,2-99,8 % точек (одиночные выбросы - вон); дальше - до grow_m по
     занятым ячейкам cell_m, связным с ядром (тонкая стена у края с долей точек меньше 0,2 % -
-    не обрезается); плюс pad_m."""
+    не обрезается); плюс pad_m (число или (слева, снизу, справа, сверху))."""
     lo = np.percentile(xy, 0.2, axis=0)
     hi = np.percentile(xy, 99.8, axis=0)
     lo, hi = _grow_box(xy, lo, hi, grow_m, cell_m)
-    lo, hi = lo - pad_m, hi + pad_m
+    pad = np.broadcast_to(np.asarray(pad_m, float), (4,)) if np.ndim(pad_m) else np.full(4, float(pad_m))
+    lo, hi = lo - pad[:2], hi + pad[2:]
     ox = math.floor(lo[0] / px) * px
     oy = math.floor(lo[1] / px) * px
     W = int(math.ceil((hi[0] - ox) / px))
@@ -242,9 +246,10 @@ def rasterize_e57(path, px: float = PIXEL_M, levels: list | None = None, thin: f
 
 def rasterize_points(src, px: float = PIXEL_M, levels: list | None = None, thin: float = 0.0,
                      z_shift: float = 0.0, seed: int = 0, sample_points: int = 3_000_000,
-                     rot: tuple | None = None, log=print) -> list[dict]:
+                     rot: tuple | None = None, pad_m=0.5, log=print) -> list[dict]:
     """Растеризатор входа сети по источнику точек (E57Source, MemorySource). Один и тот же
-    код для реальных файлов и синтетики. rot - поворот облака (градусы, cx, cy)."""
+    код для реальных файлов и синтетики. rot - поворот облака (градусы, cx, cy); pad_m - поля
+    кадра (датасет - случайные, см. build_scene)."""
     from .rasterize import detect_levels, floor_ceiling
 
     rng = np.random.default_rng(seed)
@@ -264,7 +269,7 @@ def rasterize_points(src, px: float = PIXEL_M, levels: list | None = None, thin:
     for lv in levels:
         top = lv["ceiling_z"] - lv["floor_z"]
         m = frame_points(sample, [lv], st)
-        fr = _frame_from_points(sample[m, :2], px)
+        fr = _frame_from_points(sample[m, :2], px, pad_m)
         H, W = fr["height"], fr["width"]
         nz = max(1, int(math.floor((top - 2 * BAND_MARGIN_M) / Z_BIN_M)))
         acc.append({"level": lv, "frame": fr, "nz": nz, "top": top,
@@ -528,12 +533,9 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
     face = solid & (cv2.dilate((rooms > 0).astype(np.uint8) & (~solid).astype(np.uint8), k3) > 0)
     dist = cv2.distanceTransform((~face).astype(np.uint8), cv2.DIST_L2, 5) * frame["pixel_m"]
     dist = np.clip(dist / DIST_MAX_M, 0, 1).astype(np.float16)[None]
-    # кольцо ignore: пиксель, у которого правый или нижний сосед другого класса
-    ign = np.zeros((H, W), bool)
-    ign[:, :-1] |= sem[:, :-1] != sem[:, 1:]
-    ign[:-1, :] |= sem[:-1, :] != sem[1:, :]
+    # границы классов размечены (пиксель - по своему центру): кольцо ignore по границам лишало
+    # сеть сигнала ровно там, где грань стены и откос проёма (датасеты версии 1)
     sem_out = sem.copy()
-    sem_out[ign] = IGNORE
     mask = np.isin(sem, (WALL, DOOR, WINDOW, OPENING))
     ori[:, ~mask] = 0
     hts[:, ~np.isin(sem, (DOOR, WINDOW, OPENING))] = 0
@@ -541,13 +543,15 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
             "heights": hts.astype(np.float16), "room_id": room_id}
 
 
-def ignore_unseen(lab: dict, inp: np.ndarray, px: float, min_seen: float = 0.15, near_m: float = 0.3) -> int:
-    """Неотсканированное - не размечать. Помещение, у которого виден пол или потолок меньше
-    чем на min_seen его площади (закрытая неотсканированная комната), и прилегающие к нему
-    стены и проёмы без точек ближе near_m -> ignore: сеть не учится дорисовывать то, чего в
-    облаке нет (ТЗ). Видимые места такого помещения (через дверь) и слепые круги под
-    стоянками и тени от мебели в отсканированных помещениях остаются размеченными - их
-    восстановить можно. Возвращает число пикселей, ставших ignore."""
+def ignore_unseen(lab: dict, inp: np.ndarray, px: float, min_seen: float = 0.15, near_m: float = 0.3,
+                  no_station=None) -> int:
+    """Неотсканированное - не размечать. Помещение без стоянки (no_station: номера помещений + 1,
+    как в room_id) или с видимым полом/потолком меньше чем на min_seen площади, и прилегающие к
+    нему стены и проёмы без точек ближе near_m -> ignore: сеть не учится дорисовывать то, чего в
+    облаке нет (ТЗ). Без стоянки - при любой видимой доле: коридор, на четверть видный через
+    дверь, иначе требовал бы угадать остальные три четверти. Видимые места такого помещения и
+    слепые круги под стоянками и тени от мебели в отсканированных помещениях остаются
+    размеченными - их восстановить можно. Возвращает число пикселей, ставших ignore."""
     import cv2
 
     x = np.asarray(inp, np.float32)
@@ -559,6 +563,9 @@ def ignore_unseen(lab: dict, inp: np.ndarray, px: float, min_seen: float = 0.15,
     vis = np.bincount(rid.ravel(), seen.ravel(), minlength=n)
     unseen = np.zeros(n, bool)
     unseen[1:] = (area[1:] > 0) & (vis[1:] < min_seen * np.maximum(area[1:], 1))
+    for k in no_station or ():
+        if 0 < k < n and area[k] > 0:
+            unseen[k] = True
     if not unseen.any():
         return 0
     r = max(1, int(round(near_m / px)))
@@ -700,9 +707,13 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
         rot = (float(rot_deg), float(st[:, 0].mean()), float(st[:, 1].mean()))
     for g in gts:
         g.rot = rot
+    rs = int(seed) * 1000 + int(index) + zlib.crc32(variant.encode()) % 1000
+    # пустые поля вокруг квартиры: сеть учится, что пустое без точек - улица, а не помещение
+    # (на реальных сканах она дорисовывала помещения в пустоте рядом с домом)
+    pad = np.random.default_rng(rs + 7).uniform(0.5, 2.5, 4)
     try:
         res = rasterize_points(source, px=px, levels=levels, thin=thin, z_shift=z_shift,
-                               seed=int(seed) * 1000 + int(index) + zlib.crc32(variant.encode()) % 1000, rot=rot, log=log)
+                               seed=rs, rot=rot, pad_m=pad, log=log)
     finally:
         if own:
             source.close()
@@ -720,7 +731,7 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
         d = root / "scenes" / scene_id / f"L{gt.level + 1}"
         d.mkdir(parents=True, exist_ok=True)
         lab = label_level(gt, r["frame"])
-        n_ign = ignore_unseen(lab, r["input"], px)
+        n_ign = ignore_unseen(lab, r["input"], px, no_station=[q.id + 1 for q in gt.layout.rooms if not q.scanned])
         np.save(d / "input.npy", r["input"])
         import cv2
 

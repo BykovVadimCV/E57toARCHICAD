@@ -247,3 +247,21 @@ def test_unseen_candidates():
         assert max(c0, key=lambda r: r["area_m2"])["ok"] == (not open_side)
         _, c1 = room_candidates(prob, [], mask, PX, seen=np.ones((200, 200), bool))
         assert max(c1, key=lambda r: r["area_m2"])["ok"]
+
+
+def test_trim_overhangs():
+    """Верхняя стена комнаты продолжается на 1,6 м за угол вдоль отклонённой области: свободный
+    конец - до последнего касания помещения; упёртый в стену конец и короткие стены не трогаются."""
+    from simscan.vectorize import trim_overhangs
+
+    up = 4
+    lab = np.zeros((200, 260), np.int32)
+    lab[52:148, 52:148] = 1                                       # комната, грани стен на 52 и 148 px
+    lab_up = cv2.resize(lab.astype(np.float32), (260 * up, 200 * up), interpolation=cv2.INTER_NEAREST).astype(int)
+    top = {"pts": np.array([[50.0, 50.0], [230.0, 50.0]]), "t": 4.0}
+    left = {"pts": np.array([[50.0, 50.0], [50.0, 150.0]]), "t": 4.0}
+    right = {"pts": np.array([[150.0, 50.0], [150.0, 150.0]]), "t": 4.0}
+    n = trim_overhangs([top, left, right], lab_up, up, PX)
+    assert n == 1
+    assert np.allclose(top["pts"][0], [50, 50]) and 145 <= top["pts"][1][0] <= 152, top["pts"]
+    assert np.allclose(right["pts"], [[150, 50], [150, 150]])

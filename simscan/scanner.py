@@ -81,17 +81,28 @@ def ray_grid(cfg: ScannerConfig):
     return dirs.reshape(-1, 3), rows, cols, nrow, ncol
 
 
+def _station_spots(g, cfg: ScannerConfig) -> np.ndarray:
+    """Где можно встать: с обычным отступом от стен и мебели, а в тесном помещении (санузел с
+    ванной, унитазом и раковиной) - с меньшим, вплоть до min_clearance_m; реальный оператор
+    санузел не пропускает, а ставит сканер в оставшийся пятачок."""
+    pts = np.zeros((0, 2))
+    for c in sorted({cfg.wall_clearance_m, 0.3, 0.2, cfg.min_clearance_m}, reverse=True):
+        if c > cfg.wall_clearance_m or c < cfg.min_clearance_m:
+            continue
+        pts = g.free_points(c)
+        if len(pts):
+            break
+    return pts
+
+
 def place_stations(layout: Layout, grids: dict, cfg: ScannerConfig,
                    rng: np.random.Generator) -> list[Station]:
     stations: list[Station] = []
     for room in layout.rooms:
-        if len(layout.rooms) > 1 and rng.random() < cfg.p_room_unscanned:
+        if len(layout.rooms) > 1 and room.kind in cfg.unscanned_kinds and rng.random() < cfg.p_room_unscanned:
             room.scanned = False
             continue
-        g = grids[room.id]
-        pts = g.free_points(cfg.wall_clearance_m)
-        if len(pts) == 0:
-            pts = g.free_points(0.3)
+        pts = _station_spots(grids[room.id], cfg)
         if len(pts) == 0:
             room.scanned = False
             continue

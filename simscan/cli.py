@@ -93,6 +93,10 @@ def main(argv: list[str] | None = None) -> None:
     tr.add_argument("--accum-steps", type=int, default=1, help="gradient accumulation steps (эффективный batch = batch * accum-steps)")
     tr.add_argument("--weighted-sampling", action="store_true", help="weighted sampling для баланса классов")
     tr.add_argument("--use-focal", action="store_true", help="использовать Focal Loss вместо обычного CE")
+    tr.add_argument("--init", help="новый прогон с весов готовой модели (best.pt): дообучение")
+    tr.add_argument("--vec-every", type=int, default=5,
+                    help="каждые N эпох - план на уровнях val и выбор best.pt по нему (0 - по mIoU)")
+    tr.add_argument("--vec-levels", type=int, default=48, help="уровней val для проверки плана")
     inf = sub.add_parser("infer", help="применить сеть плана к E57 или к каталогам с input.npy")
     inf.add_argument("ckpt", help="best.pt")
     inf.add_argument("paths", nargs="+")
@@ -234,7 +238,7 @@ def main(argv: list[str] | None = None) -> None:
         print(train(args.data, args.out, epochs=args.epochs, batch=args.batch, crop=args.crop, lr=args.lr,
                     workers=args.workers, resume=args.resume, seed=args.seed, max_steps=args.max_steps,
                     accum_steps=args.accum_steps, weighted_sampling=args.weighted_sampling,
-                    use_focal=args.use_focal))
+                    use_focal=args.use_focal, init=args.init, vec_every=args.vec_every, vec_levels=args.vec_levels))
         return
     if args.cmd == "infer":
         from .infer import infer

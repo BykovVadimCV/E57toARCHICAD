@@ -1074,6 +1074,47 @@ def wall_rooms(items: list, lab_up: np.ndarray, up: int, px: float) -> list[list
     return out
 
 
+def trim_overhangs(items: list, lab_up: np.ndarray, up: int, px: float, min_m: float = 0.3,
+                   step_m: float = 0.05) -> int:
+    """Свободный (ни во что не упёртый) конец прямой стены, ушедший дальше min_m за последнее
+    касание помещения, - до этого касания. Это продолжение настоящей стены вдоль области,
+    отклонённой как помещение (терраса, неотснятое за окном): сама стена ограничивает комнату и
+    фильтр «ничьих» стен её не трогает. Касание - метка помещения в 6 см за гранью (как
+    wall_rooms); конец ляжет у грани поперечной стены, join сведёт его в угол. -> обрезано концов."""
+    from .walls import connected_ends
+
+    con = connected_ends(items, lambda m: m / px)
+    Hu, Wu = lab_up.shape
+    cut = 0
+    for k, w in enumerate(items):
+        if w.get("arc") or len(w["pts"]) != 2 or all(con[k]):
+            continue
+        a, b = np.asarray(w["pts"][0], float), np.asarray(w["pts"][1], float)
+        L = float(np.linalg.norm(b - a))
+        if L < 1e-6:
+            continue
+        d = (b - a) / L
+        nrm = np.array([-d[1], d[0]])
+        ss = np.arange(0.0, L + 1e-9, step_m / px)
+        hit = np.zeros(len(ss), bool)
+        for sg in (1, -1):
+            q = a + ss[:, None] * d + sg * nrm * (w["t"] / 2 + 0.06 / px)
+            j = np.round((q[:, 0] + 0.5) * up - 0.5).astype(int)
+            i = np.round((q[:, 1] + 0.5) * up - 0.5).astype(int)
+            ok = (i >= 0) & (i < Hu) & (j >= 0) & (j < Wu)
+            hit[ok] |= lab_up[i[ok], j[ok]] > 0
+        if not hit.any():
+            continue
+        s0, s1 = float(ss[hit.argmax()]), float(ss[len(hit) - 1 - hit[::-1].argmax()])
+        na, nb = a, b
+        if not con[k][0] and s0 > min_m / px:
+            na, cut = a + d * s0, cut + 1
+        if not con[k][1] and L - s1 > min_m / px:
+            nb, cut = a + d * s1, cut + 1
+        w["pts"] = np.array([na, nb])
+    return cut
+
+
 def is_outer(prob: np.ndarray, w: dict, px: float) -> bool:
     """За одной из граней (на 15 см) - улица."""
     H, W = prob.shape[1:]
@@ -1210,6 +1251,9 @@ def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.nd
         stage("drop_roomless")
         room_list, lab_up, up = rooms(prob, items, mask, px, trace=trace, seen=seen)
         w_rooms = wall_rooms(items, lab_up, up, px)
+    if room_list and trim_overhangs(items, lab_up, up, px):     # хвосты вдоль отклонённых областей
+        join(items, P, free_reach_m=GAP_M, bridge_ok=bridge_ok)
+        stage("trim_overhangs")
     ops = openings(prob, heights, items, px, ceil_m)
 
     def to_w(xy):
