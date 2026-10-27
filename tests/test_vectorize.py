@@ -247,6 +247,41 @@ def test_unseen_candidates():
         assert max(c0, key=lambda r: r["area_m2"])["ok"] == (not open_side)
         _, c1 = room_candidates(prob, [], mask, PX, seen=np.ones((200, 200), bool))
         assert max(c1, key=lambda r: r["area_m2"])["ok"]
+        if open_side:
+            continue
+        # замкнутая, но не увиденная: комната за закрытой дверью (стены в облаке) - да,
+        # карман, который сеть обвела стенами в пустоте (точек нет), - нет
+        unseen = np.zeros((200, 200), bool)
+        walls = np.zeros((200, 200), bool)
+        walls[40:160, 40:160] = True
+        walls[46:154, 46:154] = False
+        for pts, ok in ((walls, True), (np.zeros((200, 200), bool), False)):
+            _, cp = room_candidates(prob, [], mask, PX, seen=unseen, points=pts)
+            room = max(cp, key=lambda r: r["area_m2"])
+            assert room["ok"] == ok, room
+
+
+def test_room_clipped_to_evidence():
+    """Отснятая комната, утёкшая сквозь щель в стене в пятно без точек: пятно отрезано, комната целиком."""
+    from simscan.vectorize import room_candidates, struct_mask
+
+    sem = np.zeros((200, 300), np.uint8)
+    sem[40:160, 40:270] = 2                                   # комната и обведённое сетью пятно справа
+    sem[46:154, 46:154] = 1
+    sem[60:140, 160:264] = 1                                  # «помещение» сети за стеной, в пустоте
+    sem[75:125, 152:162] = 1                                  # щель в правой стене комнаты (1 м)
+    prob = np.stack([(sem == k).astype(np.float32) for k in range(8)])
+    seen = np.zeros(sem.shape, bool)
+    seen[46:154, 46:154] = True
+    seen[100:104, 100:104] = False                            # слепой круг под сканером - дыра в увиденном
+    seen[80:100, 60:80] = False                               # и пол под мебелью
+    mask = struct_mask(prob, PX)
+    lab, c = room_candidates(prob, [], mask, PX, seen=seen)
+    room = max(c, key=lambda r: r["area_m2"])
+    assert room["ok"]
+    m = lab == room["label"]
+    assert m[60:140, 190:260].sum() == 0                     # пятно за стеной - не помещение
+    assert m[60:140, 60:140].all()                           # комната, с дырами в увиденном, - целиком
 
 
 def test_trim_overhangs():
