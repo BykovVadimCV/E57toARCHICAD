@@ -11,7 +11,7 @@
     dataset/meta.json                     версия, пиксель, каналы с нормировками, классы
     dataset/splits/{train,val,test}.txt   по планировкам, а не по сканам
     dataset/scenes/<scene>/<level>/       input.npy  float16 [8, H, W]
-                                          sem.png    uint8, классы 0-7 и 255
+                                          sem.png    uint8, классы 0-7 (255 - только в старых датасетах)
                                           dist.npy   float16 [1, H, W]
                                           orient.npy float16 [2, H, W]
                                           heights.npy float16 [2, H, W]
@@ -34,8 +34,9 @@ from pathlib import Path
 import numpy as np
 
 RASTERIZER_VERSION = "netinput-1"
-LABELS_VERSION = "labels-3"           # labels-2: неотсканированные помещения - ignore (ignore_unseen);
-                                      # labels-3: и любое помещение без стоянки - вне видимого
+LABELS_VERSION = "labels-4"           # labels-2: неотсканированные помещения - ignore (ignore_unseen);
+                                      # labels-3: и любое помещение без стоянки - вне видимого;
+                                      # labels-4: не ignore, а улица (unseen_to_outside): нет точек - нет помещения
 PIXEL_M = 0.02
 Z_BIN_M = 0.05                       # срез для долей занятости и вертикальности
 BAND_MARGIN_M = 0.1                  # от пола и потолка
@@ -77,8 +78,8 @@ def meta_doc() -> dict:
             "heights": "(низ проёма, верх проёма) / высота потолка; только на классах 3-5, иначе 0",
             "raster": "x = origin_x + (j + 0.5) * px; y = origin_y + (H - 1 - i + 0.5) * px (мировая СК облака)",
             "exterior_wall": f"полоса {EXTERIOR_BAND_M} м наружу от внутренней грани; истинная толщина - в vector.json",
-            "ignore": "только неотснятое (ignore_unseen: помещение без стоянки или почти невидимое - вне видимого); границы классов размечены по центру пикселя "
-                      "(в версии 1 - кольцо ignore в 1 пиксель)",
+            "ignore": "нет (labels-4); неотснятое - улица (unseen_to_outside: помещение без стоянки или почти невидимое - "
+                      "вне видимого); в labels-2/3 оно было ignore, в версии 1 - ещё и кольцо в 1 пиксель по границам классов",
             "frame_pad_m": "датасет: пустые поля 0,5-2,5 м с каждой стороны, случайно (вход для реальных - 0,5 м)"}
 
 
@@ -405,8 +406,10 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
     H, W = frame["height"], frame["width"]
     lay = gt.layout
     rooms = np.zeros((H, W), np.uint8)
-    room_id = np.zeros((H, W), np.uint16)                 # номер помещения + 1 (ignore_unseen)
+    room_id = np.zeros((H, W), np.uint16)                 # номер помещения + 1 (unseen_to_outside)
     for r in lay.rooms:
+        if r.open_sky:                                    # открытый балкон - пока улица (с ограждением)
+            continue
         for x0, y0, x1, y1 in r.rects():
             q = gt.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
             _fill(rooms, q, frame)
@@ -447,7 +450,11 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
                 _fill(piece_id, gt.wall_quad(w, a, b, -w.thickness / 2 - 0.01, w.thickness / 2 + 0.01), frame,
                       len(piece_dir) - 1)
     walls_px = {}
+    open_rail = {w.id for w in lay.walls if w.role == "open_balcony"}
     for w in lay.walls:
+        if w.id in open_rail:                             # ограждение открытого балкона - улица
+            walls_px[w.id] = np.zeros((H, W), bool)
+            continue
         s0, s1 = -w.ext0, w.length + w.ext1
         full = gt.wall_quad(w, s0, s1, -w.thickness / 2, w.thickness / 2)
         m = np.zeros((H, W), np.uint8)
@@ -543,19 +550,22 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
             "heights": hts.astype(np.float16), "room_id": room_id}
 
 
-def ignore_unseen(lab: dict, inp: np.ndarray, px: float, min_seen: float = 0.15, near_m: float = 0.3,
-                  no_station=None) -> int:
-    """Неотсканированное - не размечать. Помещение без стоянки (no_station: номера помещений + 1,
-    как в room_id) или с видимым полом/потолком меньше чем на min_seen площади, и прилегающие к
-    нему стены и проёмы без точек ближе near_m -> ignore: сеть не учится дорисовывать то, чего в
-    облаке нет (ТЗ). Без стоянки - при любой видимой доле: коридор, на четверть видный через
-    дверь, иначе требовал бы угадать остальные три четверти. Видимые места такого помещения и
-    слепые круги под стоянками и тени от мебели в отсканированных помещениях остаются
-    размеченными - их восстановить можно. Возвращает число пикселей, ставших ignore."""
+def unseen_to_outside(lab: dict, inp: np.ndarray, px: float, min_seen: float = 0.15, near_m: float = 0.3,
+                      no_station=None) -> int:
+    """Неотсканированное - улица. Помещение без стоянки (no_station: номера помещений + 1, как в
+    room_id) или с видимым полом/потолком меньше чем на min_seen площади, и прилегающие к нему
+    стены и проёмы - там, где точек нет ближе near_m, - класс «улица», расстояние до грани -
+    «далеко» (1): план строится по облаку, нет точек - нет помещения (ТЗ). С ignore (labels-2,
+    3) сеть ничему там не училась и на реальных сканах дорисовывала «помещения» в пустоте у
+    края съёмки и обводила их выдуманными стенами. Без стоянки - при любой видимой доле:
+    коридор, на четверть видный через дверь, - видимая четверть, а не угаданное целое. Видимые
+    места такого помещения и слепые круги под стоянками и тени от мебели в отсканированных
+    помещениях остаются размеченными - они окружены увиденным. Возвращает число пикселей,
+    ставших улицей."""
     import cv2
 
     x = np.asarray(inp, np.float32)
-    ev = ((x[0] > 0) | (x[1] > 0) | (x[2] > 0) | (x[3] > 0) | (x[4] > 0)).astype(np.uint8)
+    ev = ((x[0] > 0) | (x[1] > 0) | (x[2] > 0) | (x[3] > 0) | (x[4] > 0) | (x[5] > 0)).astype(np.uint8)
     seen = (x[3] > 0) | (x[4] > 0)
     rid = lab["room_id"]
     n = int(rid.max()) + 1
@@ -575,9 +585,10 @@ def ignore_unseen(lab: dict, inp: np.ndarray, px: float, min_seen: float = 0.15,
         cv2.MORPH_ELLIPSE, (4 * r + 1, 4 * r + 1))) > 0
     sem = lab["sem"]
     struct = np.isin(lab["sem_raw"], (WALL, DOOR, WINDOW, OPENING))
-    ign = ~near & ((room_un & (rid > 0)) | (struct & adj)) & (sem != IGNORE)
-    sem[ign] = IGNORE
-    return int(ign.sum())
+    out = ~near & ((room_un & (rid > 0)) | (struct & adj)) & (sem != IGNORE) & (sem != OUTSIDE)
+    sem[out] = OUTSIDE
+    lab["dist"][0][out] = 1
+    return int(out.sum())
 
 
 def _box_quad(b) -> np.ndarray:
@@ -601,6 +612,8 @@ def vector_doc(gt: SceneGT) -> dict:
 
     walls = []
     for w in lay.walls:
+        if w.role == "open_balcony":                      # открытый балкон на плане пока не рисуется
+            continue
         p0, p1 = gt.xy([w.p0])[0], gt.xy([w.p1])[0]
         geom = {"type": "segment", "p0": p0.round(4).tolist(), "p1": p1.round(4).tolist()}
         if w.id in arcs:                                  # дуговой пролёт: ломаная + окружность
@@ -627,6 +640,8 @@ def vector_doc(gt: SceneGT) -> dict:
                          "top_z": round(float(min(o.z1, top_wall)), 4)})
     rooms = []
     for r in lay.rooms:
+        if r.open_sky:
+            continue
         rects = r.rects()
         x0 = min(q[0] for q in rects)
         y0 = min(q[1] for q in rects)
@@ -731,7 +746,7 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
         d = root / "scenes" / scene_id / f"L{gt.level + 1}"
         d.mkdir(parents=True, exist_ok=True)
         lab = label_level(gt, r["frame"])
-        n_ign = ignore_unseen(lab, r["input"], px, no_station=[q.id + 1 for q in gt.layout.rooms if not q.scanned])
+        n_out = unseen_to_outside(lab, r["input"], px, no_station=[q.id + 1 for q in gt.layout.rooms if not q.scanned])
         np.save(d / "input.npy", r["input"])
         import cv2
 
@@ -747,7 +762,7 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
               "floor_z_gt": gt.floor_z, "ceiling_z_gt": gt.floor_z + gt.ceiling_h,
               "frame": r["frame"], "pixel_to_world": affine(r["frame"]), "rasterizer": RASTERIZER_VERSION,
               "bare": meta.get("bare"), "aug": {"thin": thin, "z_shift": z_shift, "rot_deg": rot_deg},
-              "labels": LABELS_VERSION, "ignored_unseen_px": n_ign}
+              "labels": LABELS_VERSION, "unseen_outside_px": n_out}
         (d / "scene.json").write_text(json.dumps(sc, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
         _preview(r["input"].astype(np.float32), lab["sem_raw"], d / "preview.png")
         out_dirs.append(str(d))

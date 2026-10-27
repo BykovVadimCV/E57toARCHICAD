@@ -150,6 +150,11 @@ def main(argv: list[str] | None = None) -> None:
     an.add_argument("--no-cellplan", action="store_true", help="без второго построителя (быстрее)")
     an.add_argument("--panoramas", action="store_true", help="добавить панорамы стоянок 2048 px (это фото объекта)")
     an.add_argument("--max-file-mb", type=float, default=40.0, help="файлы крупнее в архив не идут")
+    zn = sub.add_parser("zones", help="что за пространство вне увиденного пола/потолка (лоджия со ступенью? вид в окно?)")
+    zn.add_argument("e57")
+    zn.add_argument("--out", help="куда положить <файл>_zones/ и .zip (по умолчанию рядом с файлом)")
+    zn.add_argument("--box", help="своя зона: x0,y0,x1,y1 в мировых метрах (вместо поиска)")
+    zn.add_argument("--min-area", type=float, default=1.0, help="зоны меньше, м², не разбирать")
     fp = sub.add_parser("floorplan", help="план из сведённого облака: стены, окна, двери, помещения")
     fp.add_argument("e57")
     fp.add_argument("--out", help="каталог (по умолчанию <файл>_plan рядом с файлом)")
@@ -329,6 +334,12 @@ def main(argv: list[str] | None = None) -> None:
 
         print(analytics(args.e57, args.out, model=args.model, pred=args.pred, tta=args.tta,
                         cellplan=not args.no_cellplan, panoramas=args.panoramas, max_file_mb=args.max_file_mb))
+        return
+    if args.cmd == "zones":
+        from .zones import zones
+
+        box = [float(v) for v in args.box.split(",")] if args.box else None
+        print(zones(args.e57, args.out, box=box, min_m2=args.min_area))
         return
     if args.cmd == "inspect-e57":
         from pathlib import Path

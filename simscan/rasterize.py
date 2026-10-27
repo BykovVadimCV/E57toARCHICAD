@@ -223,14 +223,18 @@ def detect_levels(points: np.ndarray, min_share: float = 0.15, min_height: float
     if not planes:
         return []
     if stations_z is not None and len(stations_z):
-        # опора на стоянки: пол - самая плотная плоскость на 0,6-1,9 м ниже стоянки (грунт за
-        # окнами бывает плотнее пола и иначе отсеивает его), потолок - самая плотная выше пола
+        # опора на стоянки: пол - на 0,6-1,9 м ниже стоянки (грунт за окнами бывает плотнее пола
+        # и иначе отсеивает его) - самая высокая из весомых (не меньше трети самой плотной по
+        # точкам и площади: стол и подоконник - нет): сквозь пол сканер не видит, а потолок
+        # нижнего уровня двухуровневой квартиры на толщину перекрытия ниже - плотнее пола
+        # (его снимают все стоянки нижнего этажа); потолок - самая плотная выше пола
         levels = []
         for sz in sorted(stations_z):
             fls = [p for p in planes if 0.6 <= sz - p["z"] <= 1.9]
             if not fls:
                 continue
-            fl = max(fls, key=lambda q: q["n"])
+            n_max, a_max = max(q["n"] for q in fls), max(q["area"] for q in fls)
+            fl = max((q for q in fls if q["n"] >= n_max / 3 and q["area"] >= a_max / 3), key=lambda q: q["z"])
             ces = [q for q in planes if min_height <= q["z"] - fl["z"] <= max_height and q["z"] > sz]
             if not ces:
                 continue

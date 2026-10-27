@@ -62,6 +62,8 @@ ARC_MIN_SAG_M = 0.08                 # стрела не меньше и окр�
 MIN_ROOM_M2 = 1.0
 MIN_SEEN = 0.3                       # доля области, где сканер видел пол или потолок уровня
 ENCLOSED_UNSEEN = 0.9                # не увиденная, но замкнутая стенами (комната за закрытой дверью) - остаётся
+EVIDENCE_M = 0.3                     # отснятое помещение - не дальше от видимого пола/потолка (clip_to_evidence)
+MIN_WALL_POINTS = 0.5                # не увиденное замкнутое: доля границы, у которой есть точки облака
 MIN_ENCLOSED = 0.5                    # доля границы помещения на стенах и проёмах минус доля на улице
 GAP_M = 0.5                          # закрываемый разрыв стены
 GAP_MAX_M = 0.8                      # и до стольких - если в щели есть хоть слабая конструкция
@@ -937,14 +939,19 @@ def snap_outline(poly: np.ndarray, items: list, px: float, tol_m: float = 0.04, 
     return q
 
 
-def room_candidates(prob: np.ndarray, items: list, mask: np.ndarray, px: float, seen: np.ndarray | None = None):
+def room_candidates(prob: np.ndarray, items: list, mask: np.ndarray, px: float, seen: np.ndarray | None = None,
+                    points: np.ndarray | None = None):
     """Пп. 1-2 rooms: затравки, рост и оценка замкнутости каждой области.
     -> (метки [H, W] до отбора, [{label, area_m2, walls, street, score, seen, ok, centre}]); centre -
     (x, y) в пикселях сети; walls - доля границы по стенам и проёмам, street - прямо по улице;
     seen - доля области, где виден пол или потолок уровня (seen_from_input, расширенная на 10 см),
     или None. Сеть дорисовывает «помещение» и там, где сканер их не видел (терраса и улица за
     окнами, край съёмки): у таких областей seen около 0, у отснятых комнат 0,9-1,0 (реальные
-    сканы). Не увиденная область - помещение, только если замкнута стенами (счёт от ENCLOSED_UNSEEN)."""
+    сканы). Не увиденная область - помещение, только если замкнута стенами (счёт от ENCLOSED_UNSEEN)
+    и эти стены есть в облаке: points (points_from_input) - точки стен и предметов; у границы
+    (15 см за областью, точки расширены на 10 см) их доля не меньше MIN_WALL_POINTS. Комната за
+    закрытой дверью видна снаружи стенами (0,6-1,0); карман, который сеть обвела выдуманными
+    стенами в пустоте у края съёмки, - нет (0,15 на реальном скане)."""
     import cv2
 
     bar = mask.astype(np.uint8).copy()
@@ -969,6 +976,11 @@ def room_candidates(prob: np.ndarray, items: list, mask: np.ndarray, px: float, 
     if seen is not None:
         rs = max(1, int(round(0.1 / px)))
         seen = cv2.dilate(np.asarray(seen).astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * rs + 1,) * 2)) > 0
+    if points is not None:
+        rs = max(1, int(round(0.1 / px)))
+        points = cv2.dilate(np.asarray(points).astype(np.uint8),
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * rs + 1,) * 2)) > 0
+        nb = max(1, int(round(0.15 / px)))
     for k in np.unique(lab):
         if k == 0:
             continue
@@ -979,15 +991,50 @@ def room_candidates(prob: np.ndarray, items: list, mask: np.ndarray, px: float, 
         a = float(m.sum()) * px * px
         ys, xs = np.nonzero(m)
         sh = None if seen is None else float(seen[m > 0].mean())
-        ok = a >= MIN_ROOM_M2 and wf - sf >= MIN_ENCLOSED and (sh is None or sh >= MIN_SEEN or wf - sf >= ENCLOSED_UNSEEN)
+        pw = None
+        if points is not None:
+            band = (cv2.dilate(m, k3, iterations=nb) > 0) & (m == 0)
+            pw = float(points[band].mean()) if band.any() else 0.0
+        unseen_ok = wf - sf >= ENCLOSED_UNSEEN and (pw is None or pw >= MIN_WALL_POINTS)
+        ok = a >= MIN_ROOM_M2 and wf - sf >= MIN_ENCLOSED and (sh is None or sh >= MIN_SEEN or unseen_ok)
         cands.append({"label": int(k), "area_m2": round(a, 2), "walls": round(wf, 3), "street": round(sf, 3),
-                      "score": round(wf - sf, 3), "seen": None if sh is None else round(sh, 3), "ok": bool(ok),
+                      "score": round(wf - sf, 3), "seen": None if sh is None else round(sh, 3),
+                      "wall_points": None if pw is None else round(pw, 3), "ok": bool(ok),
                       "centre": [round(float(xs.mean()), 1), round(float(ys.mean()), 1)]})
+    if seen is not None:
+        lab = clip_to_evidence(lab, [c["label"] for c in cands if c["ok"] and c["seen"] >= MIN_SEEN], seen, px)
     return lab, cands
 
 
+def clip_to_evidence(lab: np.ndarray, labels: list, seen: np.ndarray, px: float) -> np.ndarray:
+    """Отснятое помещение - не дальше EVIDENCE_M от видимого пола или потолка: сеть дорисовывает
+    «помещение» и за стеной с щелью, в пустоте без единой точки (пятна за окнами, у края
+    съёмки), и помещение утекало бы туда сквозь щель. Дыры, со всех сторон окружённые увиденным
+    (слепой круг под сканером, пол под мебелью), - тоже увиденное. От помещения остаётся
+    наибольший связный кусок."""
+    import cv2
+
+    if not labels:
+        return lab
+    r = max(1, int(round(EVIDENCE_M / px)))
+    ev = cv2.dilate(np.asarray(seen).astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1,) * 2))
+    n, comp = cv2.connectedComponents((ev == 0).astype(np.uint8), connectivity=4)
+    border = np.unique(np.concatenate([comp[0], comp[-1], comp[:, 0], comp[:, -1]]))
+    ev = (ev > 0) | ((comp > 0) & ~np.isin(comp, border))        # закрытые дыры - увиденное
+    lab = lab.copy()
+    for k in labels:
+        m = (lab == k) & ev
+        nm, cl = cv2.connectedComponents(m.astype(np.uint8), connectivity=4)
+        if nm > 2:
+            sizes = np.bincount(cl.ravel())
+            sizes[0] = 0
+            m = cl == sizes.argmax()
+        lab[(lab == k) & ~m] = 0
+    return lab
+
+
 def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float, up: int = 4, trace: dict | None = None,
-          seen: np.ndarray | None = None):
+          seen: np.ndarray | None = None, points: np.ndarray | None = None):
     """Помещения: где они - по сети, где их грани - по стенам.
     1. затравки - то, что сеть считает помещением, за вычетом преграды (итоговые стены + маска
        конструкции), сжатое на 20 см (щели уже 40 см рвутся, комнаты не сливаются); остальное
@@ -1005,7 +1052,7 @@ def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float, up: int = 
     import cv2
 
     H, W = prob.shape[1:]
-    lab, cands = room_candidates(prob, items, mask, px, seen)
+    lab, cands = room_candidates(prob, items, mask, px, seen, points)
     if trace is not None:
         trace["candidates"], trace["candidate_labels"] = cands, lab
     good = [c["label"] for c in cands if c["ok"]]
@@ -1049,6 +1096,21 @@ def rooms(prob: np.ndarray, items: list, mask: np.ndarray, px: float, up: int = 
         out.append({"poly": to_px(poly), "faces": faces, "label": to_px([x0, y0]),
                     "seen": next(c["seen"] for c in cands if c["label"] == k)})
     return out, lab_fin, up
+
+
+def _point_share(w: dict, points: np.ndarray, px: float, reach_m: float = 0.1) -> float:
+    """Доля точек оси стены (через 5 см), у которых в облаке есть точки ближе полутолщины + reach_m."""
+    H, W = points.shape
+    r = w["t"] / 2 + reach_m / px
+    p = np.asarray(w["pts"], float)
+    hits = []
+    for a, b in zip(p[:-1], p[1:]):
+        for t in np.linspace(0, 1, max(2, int(np.linalg.norm(b - a) * px / 0.05) + 1)):
+            x, y = a + (b - a) * t
+            i0, i1 = max(0, int(y - r)), min(H, int(y + r) + 1)
+            j0, j1 = max(0, int(x - r)), min(W, int(x + r) + 1)
+            hits.append(bool(i0 < i1 and j0 < j1 and points[i0:i1, j0:j1].any()))
+    return float(np.mean(hits)) if hits else 0.0
 
 
 def wall_rooms(items: list, lab_up: np.ndarray, up: int, px: float) -> list[list[int]]:
@@ -1156,11 +1218,18 @@ def seen_from_input(x: np.ndarray) -> np.ndarray:
     return (np.asarray(x[3], np.float32) > 0) | (np.asarray(x[4], np.float32) > 0)
 
 
-def load_seen(pred_dir) -> np.ndarray | None:
-    """Маска «видны пол или потолок» (seen.png от infer, seen_from_input) или None (старые предсказания)."""
+def points_from_input(x: np.ndarray) -> np.ndarray:
+    """Вход сети [8, H, W] -> где в облаке есть точки стен и предметов (каналы occ_low/mid/high)."""
+    x = np.asarray(x)
+    return (np.asarray(x[0], np.float32) > 0) | (np.asarray(x[1], np.float32) > 0) | (np.asarray(x[2], np.float32) > 0)
+
+
+def load_seen(pred_dir, name: str = "seen.png") -> np.ndarray | None:
+    """Маска «видны пол или потолок» (seen.png от infer, seen_from_input; name="points.png" -
+    точки стен и предметов, points_from_input) или None (старые предсказания)."""
     import cv2
 
-    f = Path(pred_dir) / "seen.png"
+    f = Path(pred_dir) / name
     m = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE) if f.exists() else None
     return None if m is None else m > 0
 
@@ -1168,17 +1237,20 @@ def load_seen(pred_dir) -> np.ndarray | None:
 def vectorize(pred_dir, log=print) -> dict:
     """Каталог уровня из infer -> план (словарь в формате export-ifc, мировые метры)."""
     prob, orient, heights, scene = _load(Path(pred_dir))
-    seen = load_seen(pred_dir)
+    seen, points = (load_seen(pred_dir, n) for n in ("seen.png", "points.png"))
     return vectorize_arrays(prob, orient, heights, scene, log=log,
-                            seen=seen if seen is not None and seen.shape == prob.shape[1:] else None)
+                            seen=seen if seen is not None and seen.shape == prob.shape[1:] else None,
+                            points=points if points is not None and points.shape == prob.shape[1:] else None)
 
 
 def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.ndarray | None, scene: dict,
-                     log=print, trace: dict | None = None, seen: np.ndarray | None = None) -> dict:
+                     log=print, trace: dict | None = None, seen: np.ndarray | None = None,
+                     points: np.ndarray | None = None) -> dict:
     """Выход сети (prob [8,H,W], orient [2,H,W], heights [2,H,W]) и scene.json уровня -> план.
     trace (словарь, для аналитики) получает число стен после каждого шага (stages), маску
     конструкции (mask) и кандидатов в помещения последнего отбора (candidates, candidate_labels).
-    seen [H, W] - где сканер видел пол или потолок (seen_from_input); не увиденное помещение - только замкнутое."""
+    seen [H, W] - где сканер видел пол или потолок (seen_from_input); не увиденное помещение - только замкнутое
+    стенами, которые есть в облаке (points [H, W], points_from_input)."""
     prob = np.asarray(prob, np.float32)
     M = np.asarray(scene["pixel_to_world"], float)
     px = float(abs(M[0, 0]))
@@ -1229,7 +1301,7 @@ def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.nd
     stage("square_short")
     items = chain_at_openings(prob, items, px)
     stage("chain_at_openings")
-    room_list, lab_up, up = rooms(prob, items, mask, px, trace=trace, seen=seen)
+    room_list, lab_up, up = rooms(prob, items, mask, px, trace=trace, seen=seen, points=points)
     w_rooms = wall_rooms(items, lab_up, up, px)
     if room_list and not all(w_rooms):
         # стена, не ограничивающая ни одного помещения (терраса, соседнее неотснятое), - вон;
@@ -1243,13 +1315,14 @@ def vectorize_arrays(prob: np.ndarray, orient: np.ndarray | None, heights: np.nd
             L = float(np.linalg.norm(np.diff(w["pts"], axis=0), axis=1).sum()) * px
             touches = any(_dist_to_wall(e, B) <= (w["t"] + B["t"]) / 2 + 0.05 / px
                           for e in (w["pts"][0], w["pts"][-1]) for B, ok in zip(items, bound) if ok and B is not w)
-            if bound[k] or (L <= 1.0 and any(con[k]) and touches):
+            in_cloud = points is None or _point_share(w, points, px) >= MIN_WALL_POINTS   # выступ без точек - выдумка
+            if bound[k] or (L <= 1.0 and any(con[k]) and touches and in_cloud):
                 keep.append(k)
         items = [items[k] for k in keep]
         join(items, P, free_reach_m=GAP_M, bridge_ok=bridge_ok)   # соседи - снова в угол
         items = [w for w in items if np.linalg.norm(w["pts"][-1] - w["pts"][0]) * px >= MIN_WALL_M or w.get("arc")]
         stage("drop_roomless")
-        room_list, lab_up, up = rooms(prob, items, mask, px, trace=trace, seen=seen)
+        room_list, lab_up, up = rooms(prob, items, mask, px, trace=trace, seen=seen, points=points)
         w_rooms = wall_rooms(items, lab_up, up, px)
     if room_list and trim_overhangs(items, lab_up, up, px):     # хвосты вдоль отклонённых областей
         join(items, P, free_reach_m=GAP_M, bridge_ok=bridge_ok)

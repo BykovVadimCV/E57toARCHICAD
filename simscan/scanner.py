@@ -115,7 +115,7 @@ def place_stations(layout: Layout, grids: dict, cfg: ScannerConfig,
                 break
             chosen.append(pts[int(np.argmax(d))])
         for x, y in chosen:
-            z = float(rng.uniform(*cfg.height_m))
+            z = float(rng.uniform(*cfg.height_m)) + room.floor_z      # над своим полом (балкон ниже)
             tilt = tuple(float(v) for v in rng.normal(0, cfg.tilt_sigma_deg, 2)) \
                 if cfg.tilt_sigma_deg > 0 else (0.0, 0.0)
             stations.append(Station(len(stations), room.id, (float(x), float(y), z),

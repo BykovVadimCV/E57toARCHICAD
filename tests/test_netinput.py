@@ -14,7 +14,9 @@ from simscan.torchdata import FloorplanSamples, _flip_x, _rot90
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("ds")
-    cfg = load_config(overrides={"scanner": {"angular_step_deg": 0.4},
+    # открытый балкон намеренно не стена (ограждение - улица, наружная грань фасада с балкона - за
+    # полосой 10 см): проверка «вертикальные грани облака - на размеченных стенах» - без него
+    cfg = load_config(overrides={"scanner": {"angular_step_deg": 0.4}, "layout": {"apartment_p_open_balcony": 0.0},
                                  "export": {"preview": False, "write_merged": False, "free_space_input": False,
                                             "unet_mask": False}})
     generate_scene(cfg, tmp / "scene_00000", seed=3, index=0)
@@ -39,10 +41,10 @@ def test_format_and_alignment(built):
     assert meta["version"] >= 2
     touch = ((sem[:, :-1] == 2) & (sem[:, 1:] == 1)) | ((sem[:, :-1] == 1) & (sem[:, 1:] == 2))
     assert touch.sum() > 100
-    # совмещение: грани в облаке (вертикальные, занятые внизу или вверху) - на размеченных стенах
+    # совмещение: грани в облаке (вертикальные, занятые внизу или вверху) - на размеченных стенах и мебели
     xf = x.astype(np.float32)
     face = (xf[6] > 0.5) & ((xf[0] > 0.5) | (xf[2] > 0.5))
-    body = np.isin(sem, (2, 3, 4, 5, 255))
+    body = np.isin(sem, (2, 3, 4, 5, 6, 255))                     # стены, проёмы и размеченная мебель
     dt = cv2.distanceTransform((~body).astype(np.uint8), cv2.DIST_L2, 5)
     assert face.sum() > 500 and (dt[face] <= 1.0).mean() > 0.8
     # головы: ориентация - на стенах и проёмах, высоты - на проёмах, расстояние в [0, 1]

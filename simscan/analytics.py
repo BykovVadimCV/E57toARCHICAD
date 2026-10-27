@@ -438,15 +438,17 @@ def vectorize_section(run: Run, lvl: str, net_dir: Path, d: Path) -> dict:
 
     d.mkdir(parents=True, exist_ok=True)
     prob, orient, heights, scene = V._load(net_dir)
-    seen = V.load_seen(net_dir)
+    seen, points = V.load_seen(net_dir), V.load_seen(net_dir, "points.png")
     inp = d.parent / "input.npz"
-    if seen is None and inp.exists():                      # старые предсказания (--pred) - маска по своему входу
+    if (seen is None or points is None) and inp.exists():   # старые предсказания (--pred) - маски по своему входу
         x = np.load(inp)["input"]
-        seen = V.seen_from_input(x) if x.shape[1:] == prob.shape[1:] else None
-    if seen is not None and seen.shape != prob.shape[1:]:
-        seen = None
+        if x.shape[1:] == prob.shape[1:]:
+            seen = V.seen_from_input(x) if seen is None else seen
+            points = V.points_from_input(x) if points is None else points
+    seen = seen if seen is not None and seen.shape == prob.shape[1:] else None
+    points = points if points is not None and points.shape == prob.shape[1:] else None
     trace: dict = {}
-    plan = V.vectorize_arrays(prob, orient, heights, scene, log=run.log, trace=trace, seen=seen)
+    plan = V.vectorize_arrays(prob, orient, heights, scene, log=run.log, trace=trace, seen=seen, points=points)
     V.save_json(plan, d / "plan.json")
     V.save_png(plan, d / "plan.png")
     V.save_svg(plan, d / "plan.svg")

@@ -100,7 +100,7 @@ def vector_eval(model, dev, data, ids: list[str], tile: int = 512) -> dict:
     from .evaluate import aggregate_vector, geo_score, vector_metrics
     from .infer import predict
     from .torchdata import load_level
-    from .vectorize import seen_from_input, vectorize_arrays
+    from .vectorize import points_from_input, seen_from_input, vectorize_arrays
 
     model.eval()
     rows = []
@@ -112,7 +112,7 @@ def vector_eval(model, dev, data, ids: list[str], tile: int = 512) -> dict:
         r = predict(model, dev, s["input"], tile=tile)
         try:
             plan = vectorize_arrays(r["prob"], r.get("orient"), r.get("heights"), scene, log=lambda *a: None,
-                                    seen=seen_from_input(s["input"]))
+                                    seen=seen_from_input(s["input"]), points=points_from_input(s["input"]))
             rows.append(vector_metrics(plan, gt))
         except Exception:                                  # noqa: BLE001 - уровень без плана
             rows.append({"axis_f1": 0.0, "door_f1": 0.0, "window_f1": 0.0})

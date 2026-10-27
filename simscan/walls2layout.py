@@ -206,7 +206,7 @@ def place_balcony_blocks(layout: Layout, spans, cfg: LayoutConfig, rng) -> None:
         layout.openings.append(Opening(len(layout.openings), wid, "door", round(s_door, 3), dw, 0.0,
                                        head, rooms=tuple(pair), hinge=int(rng.choice((-1, 1))),
                                        swing=swing))
-        if ww >= 0.6:
+        if ww >= 0.6 and layout.rooms[room].kind not in ("bath", "corridor"):   # в коридор и санузел - только дверь
             s_win = s_door + (dw / 2 + gap + ww / 2) * (1 if door_first else -1)
             layout.openings.append(Opening(len(layout.openings), wid, "window", round(s_win, 3), ww,
                                            sill, head, rooms=tuple(pair)))
