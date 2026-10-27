@@ -31,6 +31,7 @@ CELL_M = 0.05                          # клетка покрытия
 SLAB_M = 0.015                         # полутолщина горизонтального слоя
 PLANE_COVER = 0.15                     # горизонталь - плоскость, если покрывает столько зоны
 STEP_M = 0.03                          # ступень пола / опускание потолка заметны от
+SUSPENDED_M = 0.3                      # потолок ниже уровня больше чем на столько - подвесной, не плита
 DISC_R = (0.3, 1.2)                    # слепой круг сканера, м (высота 1-1,7 м, обзор до -60°)
 MAX_ZONE_POINTS = 600_000
 
@@ -132,6 +133,8 @@ def analyse_zone(xyz: np.ndarray, zone_xy_mask, level: dict, n_points: int | Non
     lvl = seen_at(0.0) | seen_at(top)
     m1 = mask.ravel()
     res["seen_own"] = round(float((own_floor | own_ceil)[m1].mean()), 3)
+    tall = np.flatnonzero((slab >= 0.01) & (hs > (fh if fh is not None else 0.0) + 0.3))
+    res["top_points_h_m"] = None if not len(tall) else round(float(hs[tall[-1]]), 2)   # верх точек: ограждение
     res["seen_level"] = round(float(lvl[m1].mean()), 3)
     res["floor_points_share"] = round(float(own_floor[m1].mean()), 3)
     # слепой круг в своём полу
@@ -176,6 +179,15 @@ def verdict(r: dict) -> str:
         steps.append(f"пол {'выше' if f['step_m'] > 0 else 'ниже'} уровня на {abs(f['step_m']) * 100:.0f} см")
     if c is not None and abs(c["drop_m"]) >= STEP_M:
         steps.append(f"потолок {'ниже' if c['drop_m'] > 0 else 'выше'} уровня на {abs(c['drop_m']) * 100:.0f} см")
+    if scanned and c is None and f is not None:
+        top = r.get("top_points_h_m")
+        rail = "" if top is None else f", точки до {top - f['h_m']:.2f} м над своим полом (ограждение)"
+        return (f"отснятое, потолка нет - открыто сверху ({', '.join(steps) or 'пол на высоте уровня'}{rail}): "
+                "открытый балкон или терраса")
+    if scanned and c is not None and c["drop_m"] >= SUSPENDED_M:
+        return (f"отснятое помещение с подвесным потолком на {c['h_m'] - (f['h_m'] if f else 0.0):.2f} м от своего пола ("
+                + ", ".join(steps) + "): санузел или коридор, в том числе общий за входной дверью; у лоджии "
+                "потолок - плита, не ниже потолка квартиры")
     if scanned and steps:
         return ("отснятое помещение со своими полом/потолком (" + ", ".join(steps) +
                 "): лоджия, балкон, санузел на подиуме - сеть по полу/потолку уровня его не видит")

@@ -54,3 +54,15 @@ def test_find_zones():
     assert lab.max() == 1
     assert (lab[60:140, 250:360] == 1).all() and (lab[20:180, 20:200] == 0).all()
     assert apt[100, 110]                                        # круг - внутри квартиры
+
+
+def test_open_balcony_and_suspended_ceiling():
+    """Пол ниже на 22 см и потолка нет, точки до ограждения - открытый балкон; пол выше на 7 см и
+    потолок ниже на 46 см - подвесной потолок (санузел, коридор), а не лоджия (реальный скан)."""
+    rng = np.random.default_rng(2)
+    rail = np.c_[rng.uniform(0, 3, 10_000), np.full(10_000, 1.97), rng.uniform(9.78, 10.9, 10_000)]
+    r = analyse_zone(np.vstack([_plane(rng, 9.78, 60_000), rail]), _grid(), LEVEL)
+    assert r["ceiling"] is None and "балкон или терраса" in r["verdict"] and "ограждение" in r["verdict"], r["verdict"]
+    walls = np.c_[rng.uniform(0, 3, 20_000), rng.choice([0.0, 2.0], 20_000), rng.uniform(10.07, 12.24, 20_000)]
+    r = analyse_zone(np.vstack([_plane(rng, 10.07, 60_000), _plane(rng, 12.24, 60_000), walls]), _grid(), LEVEL)
+    assert "подвесным потолком" in r["verdict"] and "лоджия" not in r["verdict"].split(";")[0], r["verdict"]
