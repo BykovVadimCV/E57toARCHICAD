@@ -4,7 +4,7 @@
     ds = torch_dataset("dataset", "train", crop=512)      # нужен torch
     s = FloorplanSamples("dataset", "train")[0]           # то же на numpy, без torch
 
-Образец: input [8, h, w] float32; sem [h, w] int64 (255 - ignore); dist [1, h, w];
+Образец: input [8, h, w] float32; sem [h, w] int64 (255 - ignore, только поля кропа); dist [1, h, w];
 orient [2, h, w]; heights [2, h, w]; mask_orient, mask_heights [h, w] bool.
 
 Аугментации на растре - только точные: случайный кроп, отражения и повороты на 90°
@@ -15,9 +15,13 @@ orient [2, h, w]; heights [2, h, w]; mask_orient, mask_heights [h, w] bool.
 
 Улучшения v2:
 - Multiplicative/additive noise на входные каналы
-- Random erasing (cutout): стёртая область во входе = ignore в разметке. Сеть не должна
-  достраивать то, чего скан не видел (ТЗ); тени от мебели и неотсканированные зоны
-  моделируются на облаке (симуляция сканера), а не здесь.
+- Random erasing (cutout): стёртая область во входе = улица в разметке (расстояние до грани -
+  «далеко»). Сеть не должна достраивать то, чего скан не видел (ТЗ): нет точек - нет помещения;
+  с ignore она там ничему не училась и дорисовывала помещения в пустоте реальных сканов. Тени
+  от мебели и неотсканированные зоны моделируются на облаке (симуляция сканера), а не здесь.
+- unseen_outside: в датасетах labels-2/3 неотснятое помечено 255 (ignore) - читается как улица,
+  как в labels-4 (netinput.unseen_to_outside); у датасетов версии 1 255 - ещё и кольцо по
+  границам классов, их это не касается.
 - Weighted sampling: oversample сцены с проёмами (door/window малочисленны)
 """
 from __future__ import annotations
@@ -28,6 +32,7 @@ from pathlib import Path
 import numpy as np
 
 IGNORE = 255
+OUTSIDE = 0
 WALLISH = (2, 3, 4, 5)
 OPENINGS = (3, 4, 5)
 
@@ -72,9 +77,10 @@ class FloorplanSamples:
     def __init__(self, root, split: str = "train", crop: int | None = 512, train: bool = True,
                  channel_dropout: float = 0.1, multiplicative_noise: float = 0.15,
                  additive_noise: float = 0.05, random_erasing: float = 0.3,
-                 weighted_sampling: bool = True, seed: int = 0):
+                 weighted_sampling: bool = True, seed: int = 0, unseen_outside: bool = True):
         self.root = Path(root)
         self.meta = json.loads((self.root / "meta.json").read_text(encoding="utf-8"))
+        self.unseen_outside = unseen_outside and int(self.meta.get("version", 1)) >= 2
         f = self.root / "splits" / f"{split}.txt"
         self.items = [x for x in f.read_text(encoding="utf-8").split() if x] if f.exists() else []
         self.crop, self.train, self.p_drop = crop, train, channel_dropout
@@ -165,13 +171,22 @@ class FloorplanSamples:
                 x = int(self.rng.integers(0, W - hole_w + 1)) if hole_w < W else 0
                 inp[:, y:y + hole_h, x:x + hole_w] = 0.0
                 if "sem" in s:
-                    s["sem"][y:y + hole_h, x:x + hole_w] = IGNORE
+                    hole = s["sem"][y:y + hole_h, x:x + hole_w]
+                    if self.unseen_outside:                 # нет точек - нет помещения; поля кропа - как были
+                        s["dist"][:, y:y + hole_h, x:x + hole_w][:, hole != IGNORE] = 1.0
+                        hole[hole != IGNORE] = OUTSIDE
+                    else:
+                        hole[:] = IGNORE
 
         s["input"] = inp
         return s
 
     def __getitem__(self, idx: int) -> dict:
         s = load_level(self.root / "scenes" / self.items[idx])
+        if self.unseen_outside and "sem" in s:
+            m = s["sem"] == IGNORE
+            s["sem"][m] = OUTSIDE
+            s["dist"][0][m] = 1.0
         if self.crop:
             s = self._crop(s)
         if self.train:
