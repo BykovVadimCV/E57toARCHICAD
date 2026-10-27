@@ -121,3 +121,24 @@ def test_detect_levels_floor_is_densest_not_lowest():
     pts = np.vstack([plane(-0.25, -6, 0, 9_000), plane(0.0, 0, 10, 40_000), plane(2.63, 0, 10, 35_000), walls])
     lv = detect_levels(pts)
     assert len(lv) == 1 and abs(lv[0]["floor_z"]) < 0.03 and abs(lv[0]["ceiling_z"] - 2.63) < 0.03, lv
+
+
+def test_detect_levels_upper_floor_not_lower_ceiling():
+    """Верхний уровень двухуровневой квартиры: потолок нижнего на 20 см под его полом плотнее
+    (его снимают все стоянки нижнего этажа) и тоже на 0,6-1,9 м ниже стоянки - пол всё равно
+    верхний: сквозь перекрытие сканер не видит. Стол на 0,9 м ниже стоянки - не пол."""
+    from simscan.rasterize import detect_levels
+
+    rng = np.random.default_rng(2)
+
+    def plane(z, x1, n):
+        return np.c_[rng.uniform(0, x1, n), rng.uniform(0, 8, n), z + rng.normal(0, 0.002, n)]
+
+    walls = np.c_[rng.uniform(0, 10, 40_000), rng.choice([0.0, 8.0], 40_000), rng.uniform(0, 5.8, 40_000)]
+    table = np.c_[rng.uniform(1, 2.5, 6_000), rng.uniform(1, 2, 6_000), 3.85 + rng.normal(0, 0.002, 6_000)]
+    pts = np.vstack([plane(0.0, 10, 30_000), plane(2.87, 10, 45_000),      # нижний: пол, потолок
+                     plane(3.07, 10, 25_000), plane(5.8, 10, 25_000), walls, table])
+    lv = detect_levels(pts, stations_z=np.array([1.15, 1.2, 4.2, 4.25]))
+    assert len(lv) == 2, lv
+    assert abs(lv[0]["floor_z"]) < 0.03 and abs(lv[0]["ceiling_z"] - 2.87) < 0.03, lv
+    assert abs(lv[1]["floor_z"] - 3.07) < 0.03 and abs(lv[1]["ceiling_z"] - 5.8) < 0.03, lv
