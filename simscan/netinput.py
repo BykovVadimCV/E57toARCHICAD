@@ -408,6 +408,8 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
     rooms = np.zeros((H, W), np.uint8)
     room_id = np.zeros((H, W), np.uint16)                 # номер помещения + 1 (unseen_to_outside)
     for r in lay.rooms:
+        if r.open_sky:                                    # открытый балкон - пока улица (с ограждением)
+            continue
         for x0, y0, x1, y1 in r.rects():
             q = gt.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
             _fill(rooms, q, frame)
@@ -448,7 +450,11 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
                 _fill(piece_id, gt.wall_quad(w, a, b, -w.thickness / 2 - 0.01, w.thickness / 2 + 0.01), frame,
                       len(piece_dir) - 1)
     walls_px = {}
+    open_rail = {w.id for w in lay.walls if w.role == "open_balcony"}
     for w in lay.walls:
+        if w.id in open_rail:                             # ограждение открытого балкона - улица
+            walls_px[w.id] = np.zeros((H, W), bool)
+            continue
         s0, s1 = -w.ext0, w.length + w.ext1
         full = gt.wall_quad(w, s0, s1, -w.thickness / 2, w.thickness / 2)
         m = np.zeros((H, W), np.uint8)
@@ -606,6 +612,8 @@ def vector_doc(gt: SceneGT) -> dict:
 
     walls = []
     for w in lay.walls:
+        if w.role == "open_balcony":                      # открытый балкон на плане пока не рисуется
+            continue
         p0, p1 = gt.xy([w.p0])[0], gt.xy([w.p1])[0]
         geom = {"type": "segment", "p0": p0.round(4).tolist(), "p1": p1.round(4).tolist()}
         if w.id in arcs:                                  # дуговой пролёт: ломаная + окружность
@@ -632,6 +640,8 @@ def vector_doc(gt: SceneGT) -> dict:
                          "top_z": round(float(min(o.z1, top_wall)), 4)})
     rooms = []
     for r in lay.rooms:
+        if r.open_sky:
+            continue
         rects = r.rects()
         x0 = min(q[0] for q in rects)
         y0 = min(q[1] for q in rects)

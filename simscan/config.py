@@ -42,6 +42,8 @@ class LayoutConfig:
     apartment_p_cut: float = 0.3                  # угловой вырез контура у входа
     apartment_p_loggia: float = 0.6
     apartment_p_glazed_loggia: float = 0.5
+    apartment_p_open_balcony: float = 0.35         # доля лоджий - открытые балконы: без потолка, пол ниже,
+    open_balcony_step_m: Range = (0.12, 0.25)      # ограждения вместо боковых стен; на плане - улица
     apartment_party_wall_m: tuple[float, ...] = (0.16, 0.18, 0.2, 0.24)
     apartment_p_bearing_wall: float = 0.5
     parapet_thickness_m: float = 0.12

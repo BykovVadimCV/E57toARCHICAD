@@ -9,7 +9,7 @@
 прямоугольник --box в мировых метрах. По сырым точкам каждой зоны (второй проход по файлу):
 - профиль покрытия по высоте: доля клеток 5 см зоны, в которых есть точки на этой высоте (±1,5
   см); свой пол - самая покрытая горизонталь в -0,6..+0,35 м от пола уровня, свой потолок - в
-  1,8 м..потолок+0,6; ступень пола и опускание потолка относительно уровня;
+  1,8 м..потолок+0,6, если покрывает больше половины зоны; ступень пола и опускание потолка;
 - увиденное по своим полу и потолку (как floor_vis/ceil_vis, но на их высотах);
 - слепой круг: наибольшая закрытая дыра в своём полу - круг радиусом 0,3-1,2 м значит, что
   сканер стоял в зоне (снаружи через окно пол виден клочками, без такого круга);
@@ -30,17 +30,23 @@ ZONE_MIN_M2 = 1.0
 CELL_M = 0.05                          # клетка покрытия
 SLAB_M = 0.015                         # полутолщина горизонтального слоя
 PLANE_COVER = 0.15                     # горизонталь - плоскость, если покрывает столько зоны
+CEIL_COVER = 0.5                       # потолок отснятого помещения виден почти весь (0,94-0,96 на реальном
+                                       # скане); меньше - торцы плит и верх стен над открытым балконом
 STEP_M = 0.03                          # ступень пола / опускание потолка заметны от
 SUSPENDED_M = 0.3                      # потолок ниже уровня больше чем на столько - подвесной, не плита
 DISC_R = (0.3, 1.2)                    # слепой круг сканера, м (высота 1-1,7 м, обзор до -60°)
 MAX_ZONE_POINTS = 600_000
 
 
-def apartment_mask(x: np.ndarray, px: float, reach_m: float = 0.3) -> np.ndarray:
-    """Увиденное уровня: пол или потолок, расширено на reach_m, закрытые дыры заполнены."""
+def apartment_mask(x: np.ndarray, px: float, reach_m: float = 0.3, strip_m: float = 0.2) -> np.ndarray:
+    """Увиденное уровня: пол или потолок без полос уже strip_m (торцы перекрытий на фасаде, видные
+    с балкона, - иначе кольцо вокруг дома, и заполнение дыр съело бы балкон), расширено на
+    reach_m, закрытые дыры заполнены."""
     import cv2
 
     seen = ((np.asarray(x[3], np.float32) > 0) | (np.asarray(x[4], np.float32) > 0)).astype(np.uint8)
+    rs = max(1, int(round(strip_m / 2 / px)))
+    seen = cv2.morphologyEx(seen, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * rs + 1,) * 2))
     r = max(1, int(round(reach_m / px)))
     ev = cv2.dilate(seen, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1,) * 2))
     return _fill_holes(ev > 0)
@@ -111,16 +117,16 @@ def analyse_zone(xyz: np.ndarray, zone_xy_mask, level: dict, n_points: int | Non
     slab = s.sum(1) / n_cells
     res["profile"] = {"h_m": hs.tolist(), "cover": np.round(slab, 3).tolist()}
 
-    def plane(lo, hi):
+    def plane(lo, hi, need=PLANE_COVER):
         sel = (hs >= lo) & (hs <= hi)
-        if not sel.any() or slab[sel].max() < PLANE_COVER:
+        if not sel.any() or slab[sel].max() < need:
             return None, 0.0
         b = np.flatnonzero(sel)[int(np.argmax(slab[sel]))]
         near = h[np.abs(h - hs[b]) < 0.025]                 # слой насыщает соседние бины - высота по точкам
         return float(np.median(near)) if len(near) else float(hs[b]), float(slab[b])
 
     fh, fc = plane(-0.6, 0.35)                            # выше - ванна, стол, подоконник, не пол
-    ch, cc = plane(1.8, top + 0.6)
+    ch, cc = plane(1.8, top + 0.6, CEIL_COVER)
     res["floor"] = None if fh is None else {"h_m": round(fh, 3), "z_m": round(floor_z + fh, 3), "cover": round(fc, 3),
                                             "step_m": round(fh, 3)}
     res["ceiling"] = None if ch is None else {"h_m": round(ch, 3), "z_m": round(floor_z + ch, 3), "cover": round(cc, 3),
@@ -181,7 +187,8 @@ def verdict(r: dict) -> str:
         steps.append(f"потолок {'ниже' if c['drop_m'] > 0 else 'выше'} уровня на {abs(c['drop_m']) * 100:.0f} см")
     if scanned and c is None and f is not None:
         top = r.get("top_points_h_m")
-        rail = "" if top is None else f", точки до {top - f['h_m']:.2f} м над своим полом (ограждение)"
+        rail = "" if top is None else f", точки до {top - f['h_m']:.2f} м над своим полом" + (
+            " (ограждение)" if top - f["h_m"] < 1.6 else " (стены рядом выше ограждения)")
         return (f"отснятое, потолка нет - открыто сверху ({', '.join(steps) or 'пол на высоте уровня'}{rail}): "
                 "открытый балкон или терраса")
     if scanned and c is not None and c["drop_m"] >= SUSPENDED_M:

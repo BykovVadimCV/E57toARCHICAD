@@ -231,21 +231,22 @@ class SceneBuilder:
     def wall_pieces(self, wall: Wall) -> list[tuple[float, float, float, float]]:
         """Куски тела стены (s_a, s_b, z_a, z_b) после вырезания проёмов."""
         H = wall.height if wall.height is not None else self.layout.ceiling_height
+        z0 = wall.base                                     # у открытого балкона - ниже пола уровня
         ops = sorted(self.layout.openings_on(wall.id), key=lambda o: o.s)
         pieces = []
         cur = -wall.ext0
         for o in ops:
             sa, sb = o.s - o.width / 2, o.s + o.width / 2
             if sa - cur > 1e-6:
-                pieces.append((cur, sa, 0.0, H))
-            if o.z0 > 1e-6:
-                pieces.append((sa, sb, 0.0, o.z0))
+                pieces.append((cur, sa, z0, H))
+            if o.z0 > z0 + 1e-6:
+                pieces.append((sa, sb, z0, o.z0))
             if o.z1 < H - 1e-6:
                 pieces.append((sa, sb, o.z1, H))
             cur = max(cur, sb)
         end = wall.length + wall.ext1
         if end - cur > 1e-6:
-            pieces.append((cur, end, 0.0, H))
+            pieces.append((cur, end, z0, H))
         return pieces
 
     def _wall(self, wall: Wall, refl: float) -> None:
@@ -329,14 +330,21 @@ class SceneBuilder:
             c = cfg.get(part, {})
             t = float(c.get("thickness", SLAB_M))
             rects = list(self.layout.slab_rects())
-            for h in c.get("holes", []):
-                from .duplex import subtract_rect
+            from .duplex import subtract_rect
 
+            # открытый балкон: потолка нет, пол - своя плита ниже (room.floor_z)
+            own = [r for r in self.layout.rooms if r.open_sky]
+            for h in c.get("holes", []) + [r.cell for r in own]:
                 rects = [q for r in rects for q in subtract_rect(r, h)]
             zc = -t / 2 if part == "floor" else H + t / 2
             for k, (x0, y0, x1, y1) in enumerate(rects):
                 self._add(Box(((x0 + x1) / 2, (y0 + y1) / 2, zc), (x1 - x0, y1 - y0, t)), label, refl,
                           f"slab:{k}", inst, deform=True)
+            if part == "floor":
+                for r in own:
+                    x0, y0, x1, y1 = r.cell
+                    self._add(Box(((x0 + x1) / 2, (y0 + y1) / 2, r.floor_z - t / 2), (x1 - x0, y1 - y0, t)), label,
+                              refl, f"slab:balcony{r.id}", inst, deform=True)
         for r in self.layout.rooms:
             if r.ceiling_z < H - 1e-6:
                 inst = self._new_instance()

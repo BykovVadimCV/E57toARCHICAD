@@ -41,7 +41,9 @@ class Wall:
     ext0: float = 0.0                # удлинение тела за p0 (наружные углы, стыки)
     ext1: float = 0.0                # удлинение тела за p1
     height: float | None = None      # None - до перекрытия
-    role: str = ""                   # "balcony_interface" - стена между комнатой и балконом
+    role: str = ""                   # "balcony_interface" - стена между комнатой и балконом;
+                                     # "open_balcony" - ограждение открытого балкона
+    base: float = 0.0                # низ тела стены от пола уровня (у открытого балкона пол ниже)
 
     @property
     def length(self) -> float:
@@ -91,6 +93,8 @@ class Room:
     kind: str = "room"                          # room | corridor | bath | kitchen | balcony
     ceiling_z: float = 0.0                      # низ потолка (подвесной ниже перекрытия)
     scanned: bool = True
+    floor_z: float = 0.0                        # пол от пола уровня (открытый балкон - ниже)
+    open_sky: bool = False                      # открытый балкон: без потолка; на плане - улица
     # Непрямоугольное помещение: точное покрытие чистой площади прямоугольниками
     # (пусто - помещение совпадает с clear) и грани стен вдоль контура
     # (x0, y0, x1, y1, nx, ny), нормаль внутрь помещения - для плинтусов.

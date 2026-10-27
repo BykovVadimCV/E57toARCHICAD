@@ -97,6 +97,7 @@ def warped_scene(tmp_path_factory):
 
     tmp = tmp_path_factory.mktemp("warp")
     cfg = load_config(overrides={"scanner": {"angular_step_deg": 0.4},
+                                 "layout": {"apartment_p_open_balcony": 0.0},        # см. test_netinput
                                  "realism": {"p_angle_jitter": 1.0, "p_arc": 1.0},
                                  "export": {"preview": False, "write_merged": False, "free_space_input": False,
                                             "unet_mask": False}})
@@ -117,7 +118,7 @@ def test_scan_and_labels_agree(warped_scene):
     ori = np.load(f"{d}/orient.npy").astype(np.float32)
     # грани облака лежат на размеченных стенах (как в test_netinput, но с деформацией)
     face = (x[6] > 0.5) & ((x[0] > 0.5) | (x[2] > 0.5))
-    body = np.isin(sem, (2, 3, 4, 5, 255))
+    body = np.isin(sem, (2, 3, 4, 5, 6, 255))                     # стены, проёмы и размеченная мебель
     dt = cv2.distanceTransform((~body).astype(np.uint8), cv2.DIST_L2, 5)
     assert face.sum() > 500 and (dt[face] <= 1.0).mean() > 0.8
     # ориентация разметки - по направлению граней облака (тензор структуры), а не по осям

@@ -330,7 +330,10 @@ class ApartmentGenerator:
                     grid[sl, :depth_c] = LOGGIA
                 else:
                     grid[sl, nx - depth_c:] = LOGGIA
-                loggia = {"side": side, "glazed": bool(rng.random() < cfg.apartment_p_glazed_loggia)}
+                is_open = bool(rng.random() < cfg.apartment_p_open_balcony)
+                loggia = {"side": side, "glazed": bool(not is_open and rng.random() < cfg.apartment_p_glazed_loggia),
+                          "open": is_open, "step": round(self._u(cfg.open_balcony_step_m), 3) if is_open else 0.0,
+                          "parapet_h": round(self._u(cfg.parapet_height_m), 3)}
         return _Shell(grid, c, facades, entrance, loggia, {"shape": kind})
 
     # --- семена ----------------------------------------------------------
@@ -729,6 +732,8 @@ class ApartmentGenerator:
             k_best = max(scores, key=scores.get) if scores else None
             if lg > (scores.get(k_best, 0) if k_best is not None else 0):
                 room.kind, room.name = "balcony", "Лоджия"
+                if shell.loggia and shell.loggia.get("open"):
+                    room.name, room.open_sky, room.floor_z = "Балкон", True, -shell.loggia["step"]
                 continue
             t = TYPES[rooms[k_best].type]
             room.kind, room.name = t.kind, t.label
@@ -740,6 +745,10 @@ class ApartmentGenerator:
         if len(comp_of) != len(rooms):
             raise InvalidPlan("помещения слились при построении стен")
 
+        if shell.loggia and shell.loggia.get("open"):         # пол балкона ниже - стены до него
+            for w in walls:
+                if w.role in ("open_balcony", "balcony_interface"):
+                    w.base = -shell.loggia["step"]
         layout = Layout(H, lay_rooms, walls, footprint=footprint_rects(grid), meta={
             "source": "apartment", "program": prog, "shape": shell.meta.get("shape"),
             "facades": list(shell.facades), "entrance_side": shell.entrance,
@@ -761,6 +770,9 @@ class ApartmentGenerator:
         room_side, other, out_dir = (a, b, b_dir) if a >= 0 or a == LOGGIA else (b, a, a_dir)
         if other == OUT:
             if room_side == LOGGIA:
+                if shell.loggia and shell.loggia.get("open"):        # открытый балкон: ограждение со всех сторон
+                    return ("parapet", "open_balcony", self.cfg.parapet_thickness_m,
+                            round(shell.loggia["parapet_h"] - shell.loggia["step"], 3))
                 if out_dir in shell.facades:
                     if shell.loggia and shell.loggia["glazed"]:
                         return ("exterior", "loggia_glazing", self.cfg.parapet_thickness_m, None)
@@ -869,7 +881,7 @@ class ApartmentGenerator:
                     layout.openings.append(Opening(len(layout.openings), wid, "door", s_d, dw, 0.0, head,
                                                    rooms=pair, hinge=int(rng.choice((-1, 1))), swing=swing))
                 ww = round(min(self._u((1.0, 1.6)), b - a - 0.5), 2)
-                if ww >= 0.6:
+                if ww >= 0.6 and layout.rooms[rid].kind not in ("bath", "corridor"):   # туда - без окна
                     s = gen._try_place(layout, wid, a, b, ww, 0.15)
                     if s is not None:
                         layout.openings.append(Opening(len(layout.openings), wid, "window", s, ww,

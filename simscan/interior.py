@@ -213,6 +213,8 @@ class Furnisher:
         if self.cfg.door_frames:
             self._door_frames(layout)
         for room in layout.rooms:
+            if room.open_sky:                               # открытый балкон - пустой (пол ниже, предметы от 0)
+                continue
             g = grids[room.id]
             self._wall_fixtures(layout, room, g)
             self._columns(layout, room, g)
@@ -230,7 +232,8 @@ class Furnisher:
                 self._scans(layout, room, g)
         if self.cfg.baseboards and not self.bare:
             for room in layout.rooms:
-                self._baseboards(layout, room)
+                if not room.open_sky:
+                    self._baseboards(layout, room)
         if self.cfg.exterior_ground:
             self._exterior(layout)
         return grids
