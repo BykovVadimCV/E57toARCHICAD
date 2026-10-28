@@ -415,8 +415,8 @@ python -m simscan dataset pack dataset --out dataset.zip         # один ар
 # несколько машин: одинаковый --seed, разные --start; потом слить scenes/ и
 python -m simscan dataset splits dataset
 
-# обучение (нужен torch; на Colab - notebooks/colab_train.ipynb; дообучение весов v3 на dataset_v4 -
-# notebooks/colab_finetune_v4.ipynb)
+# обучение (нужен torch; на Colab - notebooks/colab_train.ipynb; дообучение готовых весов на новом датасете -
+# notebooks/colab_finetune.ipynb)
 python -m simscan train --data dataset --out runs/r1 --epochs 60 --batch 8 [--resume]
 
 # best.pt выбирается по плану: каждые --vec-every эпох (по умолчанию 5) сеть строит план на --vec-levels
