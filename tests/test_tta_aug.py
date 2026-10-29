@@ -70,9 +70,9 @@ def test_erasing_marks_labels_ignore(tmp_path):
         assert (s["sem"][~erased] != IGNORE).all()
 
 
-def test_unseen_and_erased_are_outside(tmp_path):
-    """Датасет версии 2: неотснятое (255 в labels-2/3) и стёртое cutout - улица, расстояние «далеко»:
-    нет точек - нет помещения."""
+def test_unseen_is_outside_erased_is_ignore(tmp_path):
+    """Датасет версии 2: неотснятое (255 в labels-2/3) - улица, расстояние «далеко»; стёртое cutout -
+    ignore, а не улица: у тела стены вход тоже пустой (прогон v5_ft)."""
     _dataset(tmp_path)
     d = tmp_path / "scenes" / "s0"
     sem = cv2.imread(str(d / "sem.png"), cv2.IMREAD_UNCHANGED)
@@ -89,6 +89,6 @@ def test_unseen_and_erased_are_outside(tmp_path):
         s = ds[0]
         erased = (s["input"] == 0).all(0)
         assert erased.any()
-        assert (s["sem"][erased] == 0).all() and (s["dist"][0][erased] == 1).all()
+        assert (s["sem"][erased] == IGNORE).all()
         assert not s["mask_orient"][erased].any() and not s["mask_heights"][erased].any()
-        assert (s["sem"] != IGNORE).all()
+        assert (s["sem"][~erased] != IGNORE).all()
