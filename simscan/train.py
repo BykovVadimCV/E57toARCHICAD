@@ -26,13 +26,13 @@ CLASS_WEIGHTS = (0.3, 0.5, 2.0, 4.0, 4.0, 3.0, 1.0, 2.0)   # улица, пом�
 SCORED = (2, 3, 4, 5)                                     # mIoU, по которому выбирается best.pt
 
 
-def _loaders(data, crop, batch, workers, seed, weighted_sampling: bool = False):
+def _loaders(data, crop, batch, workers, seed, weighted_sampling: bool = False, erasing_policy: str = "ignore"):
     import torch
     from torch.utils.data import DataLoader
 
     from .torchdata import torch_dataset, make_weighted_sampler
 
-    tr = torch_dataset(data, "train", crop=crop, train=True, seed=seed, weighted_sampling=weighted_sampling)
+    tr = torch_dataset(data, "train", crop=crop, train=True, seed=seed, weighted_sampling=weighted_sampling, erasing_policy=erasing_policy)
     va = torch_dataset(data, "val", crop=None, train=False)          # val - уровни целиком
 
     def init(wid):                     # у каждого процесса загрузчика своя случайность аугментаций
@@ -124,7 +124,7 @@ def vector_eval(model, dev, data, ids: list[str], tile: int = 512) -> dict:
 def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: float = 1e-3, workers: int = 2,
           resume: bool = False, seed: int = 0, amp: bool = True, max_steps: int | None = None,
           accum_steps: int = 1, weighted_sampling: bool = False, use_focal: bool = False,
-          init: str | None = None, vec_every: int = 5, vec_levels: int = 48, log=print) -> dict:
+          init: str | None = None, vec_every: int = 5, vec_levels: int = 48, log=print, erasing_policy: str = "ignore") -> dict:
     import torch
 
     from .net import PlanNet, losses
@@ -133,7 +133,7 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tl, vl = _loaders(data, crop, batch, workers, seed, weighted_sampling)
+    tl, vl = _loaders(data, crop, batch, workers, seed, weighted_sampling, erasing_policy)
     log(f"устройство {dev}; train {len(tl.dataset)}, val {len(vl.dataset)} уровней")
     if weighted_sampling:
         log("weighted sampling включён для баланса классов")
@@ -184,6 +184,9 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
     vec_ids = [val_ids[k] for k in np.linspace(0, len(val_ids) - 1, min(vec_levels, len(val_ids))).astype(int)] \
         if val_ids and vec_every > 0 else []
     meta = json.loads((Path(data) / "meta.json").read_text(encoding="utf-8"))
+    meta["augmentation_contract"] = "zero_preserving_continuous_noise_v1"
+    meta["supervision_valid_sidecar"] = True
+    meta["erasing_policy"] = erasing_policy
     step = 0
     accum_step = 0
     for ep in range(start, epochs):
@@ -252,3 +255,4 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
         if max_steps and step >= max_steps:
             break
     return {"best": best, "best_geo": best_geo, "out": str(out)}
+

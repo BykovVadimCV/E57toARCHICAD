@@ -711,7 +711,30 @@ def _opening_centers_gt(gt_vec: dict) -> list[dict]:
     return out
 
 
-def _room_iou(gt_rooms, pr_rooms, px: float = 0.05) -> tuple[list, int]:
+def _scope_points(xy, scope):
+    if not scope or len(xy)==0:return np.ones(len(xy),bool)
+    fr=scope['frame'];p=np.asarray(xy,float)
+    j=np.floor((p[:,0]-fr['origin_x'])/fr['pixel_m']).astype(int)
+    i=fr['height']-1-np.floor((p[:,1]-fr['origin_y'])/fr['pixel_m']).astype(int)
+    inside=(j>=0)&(j<fr['width'])&(i>=0)&(i<fr['height'])
+    edges=np.asarray(scope['valid_runs'],int).ravel()
+    return inside & ((np.searchsorted(edges,i*fr['width']+j,side='right')%2)==1)
+
+
+def _scope_walls(walls,scope):
+    if not scope:return walls
+    out=[];step=scope['frame']['pixel_m']/2
+    for w in walls:
+        for a,b in zip(w['poly'][:-1],w['poly'][1:]):
+            n=max(1,int(np.ceil(np.linalg.norm(b-a)/step)))
+            q=a+(b-a)*np.linspace(0,1,n+1)[:,None]
+            valid=_scope_points((q[:-1]+q[1:])/2,scope)
+            edges=np.flatnonzero(np.diff(np.r_[False,valid,False].astype(np.int8)))
+            for lo,hi in edges.reshape(-1,2):out.append({**w,'poly':q[[lo,hi]]})
+    return out
+
+
+def _room_iou(gt_rooms, pr_rooms, px: float = 0.05, scope=None) -> tuple[list, int]:
     import cv2
 
     polys = [np.asarray(r, float) for r in gt_rooms + pr_rooms if len(r) >= 3]
@@ -721,14 +744,17 @@ def _room_iou(gt_rooms, pr_rooms, px: float = 0.05) -> tuple[list, int]:
     lo = allp.min(0) - px
     H, W = (np.ceil((allp.max(0) - lo) / px).astype(int) + 2)[::-1]
 
+    yy,xx=np.indices((H,W))
+    scope_mask=_scope_points(np.c_[lo[0]+xx.ravel()*px,lo[1]+yy.ravel()*px],scope).reshape(H,W)
     def mask(poly):
         m = np.zeros((H, W), np.uint8)
         q = np.round((np.asarray(poly, float) - lo) / px).astype(np.int32)
         cv2.fillPoly(m, [q], 1)
-        return m.astype(bool)
+        return m.astype(bool)&scope_mask
 
     gm = [mask(r) for r in gt_rooms if len(r) >= 3]
     pm = [mask(r) for r in pr_rooms if len(r) >= 3]
+    gm=[m for m in gm if m.any()];pm=[m for m in pm if m.any()]
     ious = []
     used = set()
     for g in gm:
@@ -820,9 +846,11 @@ def vector_metrics(plan: dict, gt_vec: dict, tol: float = VEC_TOL_M) -> dict:
            стен на стену эталона (дробление);
     проёмы: центр ближе OPEN_MATCH_M и тот же тип - найден; ошибка ширины;
     помещения: IoU с лучшим совпавшим, лишние."""
-    gw = label_walls(gt_vec)
+    scope=gt_vec.get("evaluation_scope")
+    gw = _scope_walls(label_walls(gt_vec),scope)
     pw = [{"poly": np.asarray(w["points"], float), "t": float(w.get("thickness") or 0.0)}
           for w in plan.get("walls", []) if len(w.get("points", [])) >= 2]
+    pw=_scope_walls(pw,scope)
     gseg = np.array([[a, b] for w in gw for a, b in zip(w["poly"][:-1], w["poly"][1:])]).reshape(-1, 2, 2)
     gseg_t = np.array([w["t"] for w in gw for _ in range(len(w["poly"]) - 1)])
     pseg = np.array([[a, b] for w in pw for a, b in zip(w["poly"][:-1], w["poly"][1:])]).reshape(-1, 2, 2)
@@ -855,10 +883,11 @@ def vector_metrics(plan: dict, gt_vec: dict, tol: float = VEC_TOL_M) -> dict:
     res["axis_f1"] = _r(_f1(res["axis_recall"] or 0, res["axis_precision"] or 0))
     res.update(_structure_quality(gw, pw, owner_g, d_g, i_g, pseg, tol))
     # проёмы
-    go = [g for g in _opening_centers_gt(gt_vec) if _in_raster(np.asarray(g["c"])[None], plan)[0]]
+    go = [g for g in _opening_centers_gt(gt_vec) if _in_raster(np.asarray(g["c"])[None], plan)[0] and _scope_points(np.asarray(g["c"])[None],scope)[0]]
     po = [{"type": o.get("opening_type"), "c": (np.asarray(o["a"], float) + np.asarray(o["b"], float)) / 2,
            "width": float(o.get("width") or np.linalg.norm(np.subtract(o["a"], o["b"])))}
           for o in plan.get("openings", [])]
+    po=[p for p in po if _scope_points(np.asarray(p["c"])[None],scope)[0]]
     used, tp, werr = set(), 0, []
     by_type: dict = {}
     for g in go:
@@ -882,7 +911,8 @@ def vector_metrics(plan: dict, gt_vec: dict, tol: float = VEC_TOL_M) -> dict:
         res[f"{kind}_width_err_cm"] = _r(np.median(by_type[kind]), 1) if by_type.get(kind) else None
     # помещения
     ious, extra = _room_iou([r["polygon"] for r in gt_vec.get("rooms", [])],
-                            [r["points"] for r in plan.get("rooms", [])])
+                            [r["points"] for r in plan.get("rooms", [])],scope=scope)
     res.update({"rooms_gt": len(ious), "rooms_pred": len(plan.get("rooms", [])), "rooms_extra": extra,
                 "room_iou_mean": _r(np.mean(ious)) if ious else None})
     return res
+

@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 
 RASTERIZER_VERSION = "netinput-1"
-LABELS_VERSION = "labels-4"           # labels-2: неотсканированные помещения - ignore (ignore_unseen);
+LABELS_VERSION = "labels-5"           # labels-2: неотсканированные помещения - ignore (ignore_unseen);
                                       # labels-3: и любое помещение без стоянки - вне видимого;
                                       # labels-4: не ignore, а улица (unseen_to_outside): нет точек - нет помещения
 PIXEL_M = 0.02
@@ -69,7 +69,7 @@ CLUTTER_SKIP_KINDS = ("baseboard",)  # плинтус - часть грани, �
 def meta_doc() -> dict:
     from . import __version__
 
-    return {"version": 2, "rasterizer": RASTERIZER_VERSION, "generator": __version__,
+    return {"version": 3, "labels": LABELS_VERSION, "rasterizer": RASTERIZER_VERSION, "generator": __version__,
             "pixel_m": PIXEL_M, "z_bin_m": Z_BIN_M, "bands_m": [BAND_MARGIN_M, LOW_TOP, MID_TOP],
             "channels": CHANNELS, "classes": {str(k): v for k, v in CLASSES.items()},
             "dist": {"max_m": DIST_MAX_M, "norm": "расстояние до ближайшей видимой грани стены / 0,3, обрезка до 1"},
@@ -78,7 +78,7 @@ def meta_doc() -> dict:
             "heights": "(низ проёма, верх проёма) / высота потолка; только на классах 3-5, иначе 0",
             "raster": "x = origin_x + (j + 0.5) * px; y = origin_y + (H - 1 - i + 0.5) * px (мировая СК облака)",
             "exterior_wall": f"полоса {EXTERIOR_BAND_M} м наружу от внутренней грани; истинная толщина - в vector.json",
-            "ignore": "нет (labels-4); неотснятое - улица (unseen_to_outside: помещение без стоянки или почти невидимое - "
+            "ignore": "labels-5: unsupported physical regions ignored by default; legacy: неотснятое - улица (unseen_to_outside: помещение без стоянки или почти невидимое - "
                       "вне видимого); в labels-2/3 оно было ignore, в версии 1 - ещё и кольцо в 1 пиксель по границам классов",
             "frame_pad_m": "датасет: пустые поля 0,5-2,5 м с каждой стороны, случайно (вход для реальных - 0,5 м)"}
 
@@ -247,7 +247,7 @@ def rasterize_e57(path, px: float = PIXEL_M, levels: list | None = None, thin: f
 
 def rasterize_points(src, px: float = PIXEL_M, levels: list | None = None, thin: float = 0.0,
                      z_shift: float = 0.0, seed: int = 0, sample_points: int = 3_000_000,
-                     rot: tuple | None = None, pad_m=0.5, log=print) -> list[dict]:
+                     rot: tuple | None = None, pad_m=0.5, log=print, reference_shift: float = 0.) -> list[dict]:
     """Растеризатор входа сети по источнику точек (E57Source, MemorySource). Один и тот же
     код для реальных файлов и синтетики. rot - поворот облака (градусы, cx, cy); pad_m - поля
     кадра (датасет - случайные, см. build_scene)."""
@@ -266,6 +266,7 @@ def rasterize_points(src, px: float = PIXEL_M, levels: list | None = None, thin:
         if not levels:
             fl, ce = floor_ceiling(sample[:, 2])
             levels = [{"floor_z": fl, "ceiling_z": ce, "height_m": ce - fl}]
+    levels=[dict(lv, floor_z=lv['floor_z']+reference_shift, ceiling_z=lv['ceiling_z']+reference_shift) for lv in levels]
     acc = []
     for lv in levels:
         top = lv["ceiling_z"] - lv["floor_z"]
@@ -298,8 +299,7 @@ def rasterize_points(src, px: float = PIXEL_M, levels: list | None = None, thin:
             a["count"] += np.bincount(flat[inner], minlength=H * W)
             k = np.floor((h - BAND_MARGIN_M) / Z_BIN_M).astype(np.int64)
             band = ok & (k >= 0) & (k < nz)
-            u, c = np.unique(flat[band] * nz + k[band], return_counts=True)
-            a["vox"][u] = np.minimum(a["vox"][u].astype(np.int64) + c, 65535).astype(np.uint16)
+            accumulate_voxels(a["vox"],flat[band]*nz+k[band])
     out = []
     for a in acc:
         fr, nz = a["frame"], a["nz"]
@@ -336,9 +336,26 @@ def _poly_px(poly_world: np.ndarray, frame: dict) -> np.ndarray:
 
 
 def _fill(mask: np.ndarray, poly_world, frame: dict, value=1) -> None:
-    import cv2
+    # Half-open scanline membership at actual pixel centers; no inclusive drawing.
+    poly=np.asarray(poly_world,float)
+    if len(poly)<3:return
+    px=frame['pixel_m']; H,W=mask.shape
+    i0=max(0,int(np.floor(H-(poly[:,1].max()-frame['origin_y'])/px-.5)))
+    i1=min(H,int(np.ceil(H-(poly[:,1].min()-frame['origin_y'])/px-.5))+1)
+    rows=np.arange(i0,i1); ys=frame['origin_y']+(H-rows-.5)*px
+    aa=poly; bb=np.roll(poly,-1,axis=0)
+    hit=(aa[:,1,None]>ys)!=(bb[:,1,None]>ys)
+    dy=bb[:,1]-aa[:,1]
+    xx=aa[:,0,None]+(ys-aa[:,1,None])*((bb[:,0]-aa[:,0])/np.where(dy!=0,dy,1))[:,None]
+    xx=np.sort(np.where(hit,xx,np.inf),axis=0)
+    for k in range(0,len(poly)-1,2):
+        valid=np.isfinite(xx[k+1])
+        for row,lo,hi in zip(rows[valid],xx[k,valid],xx[k+1,valid]):
+            j0=max(0,int(np.ceil((lo-frame['origin_x'])/px-.5-1e-9)))
+            j1=min(W,int(np.ceil((hi-frame['origin_x'])/px-.5-1e-9)))
+            if j1>j0:mask[row,j0:j1]=value
 
-    cv2.fillPoly(mask, [_poly_px(np.asarray(poly_world, float), frame)], value, lineType=cv2.LINE_8, shift=4)
+
 
 
 class SceneGT:
@@ -397,6 +414,34 @@ class SceneGT:
         side = w.outward if w.outward else 1
         f = -side * w.thickness / 2
         return f, f + side * min(EXTERIOR_BAND_M, w.thickness)
+
+
+def distance_to_faces(gt,frame):
+    """Continuous XY distance to structural host faces, including column faces."""
+    H,W=frame['height'],frame['width'];px=frame['pixel_m']
+    out=np.full((H,W),DIST_MAX_M,np.float32);lines=[]
+    for w in gt.layout.walls:
+        if w.role=='open_balcony':continue
+        offsets=[gt.inner_offsets(w)[0]] if w.kind=='exterior' else [-w.thickness/2,w.thickness/2]
+        for off in offsets:lines.append(gt.poly([w.point(-w.ext0,off),w.point(w.length+w.ext1,off)],False))
+    for it in gt.layout.items:
+        if it.label=='column':
+            for box in it.boxes:
+                q=gt.poly(_box_quad(box));lines.append(np.vstack([q,q[:1]]))
+    for line in lines:
+        for a,b in zip(line[:-1],line[1:]):
+            lo=np.minimum(a,b)-DIST_MAX_M;hi=np.maximum(a,b)+DIST_MAX_M
+            j0=max(0,int(np.floor((lo[0]-frame['origin_x'])/px)))
+            j1=min(W,int(np.ceil((hi[0]-frame['origin_x'])/px)))
+            i0=max(0,H-int(np.ceil((hi[1]-frame['origin_y'])/px)))
+            i1=min(H,H-int(np.floor((lo[1]-frame['origin_y'])/px)))
+            if j1<=j0 or i1<=i0:continue
+            yy,xx=np.mgrid[i0:i1,j0:j1]
+            x=frame['origin_x']+(xx+.5)*px-a[0]
+            y=frame['origin_y']+(H-yy-.5)*px-a[1]
+            v=b-a;t=np.clip((x*v[0]+y*v[1])/max(float(v@v),1e-20),0,1)
+            np.minimum(out[i0:i1,j0:j1],np.hypot(x-t*v[0],y-t*v[1]),out=out[i0:i1,j0:j1])
+    return (out/DIST_MAX_M).astype(np.float16)[None]
 
 
 def label_level(gt: SceneGT, frame: dict) -> dict:
@@ -518,16 +563,10 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
             _fill(clutter, gt.poly(_box_quad(b)), frame)
         for pr in it.prims:
             t = pr.get("type")
-            if t == "mesh":
-                from .layout import Box
-
-                _fill(clutter, gt.poly(_box_quad(Box(tuple(pr["center"]), tuple(pr["size"]), pr.get("yaw", 0.0)))),
-                      frame)
-            elif t == "cylinder":
-                c = np.asarray(pr["center"], float)
-                ang = np.linspace(0, 2 * math.pi, 24, endpoint=False)
-                _fill(clutter, gt.xy(np.c_[c[0] + pr["radius"] * np.cos(ang), c[1] + pr["radius"] * np.sin(ang)]),
-                      frame)
+            from .meshes import prim_mesh
+            vertices,triangles=prim_mesh(pr)
+            for tri in triangles:
+                _fill(clutter,gt.poly(vertices[tri,:2]),frame)
     sem[(clutter > 0) & (sem == INTERIOR)] = CLUTTER
     # проём в перекрытии (верхний этаж) и лестница под ним (нижний) - duplex.py
     for x0, y0, x1, y1 in lay.meta.get("void_rects", []):
@@ -535,11 +574,7 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
         _fill(m, gt.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]), frame)
         sem[(m > 0) & np.isin(sem, (INTERIOR, CLUTTER))] = VOID
     # расстояние до видимой грани: граница тела стены (с проёмами) с помещением
-    solid = (body > 0) | np.isin(sem, (WALL, DOOR, WINDOW, OPENING))
-    k3 = np.ones((3, 3), np.uint8)
-    face = solid & (cv2.dilate((rooms > 0).astype(np.uint8) & (~solid).astype(np.uint8), k3) > 0)
-    dist = cv2.distanceTransform((~face).astype(np.uint8), cv2.DIST_L2, 5) * frame["pixel_m"]
-    dist = np.clip(dist / DIST_MAX_M, 0, 1).astype(np.float16)[None]
+    dist=distance_to_faces(gt,frame)
     # границы классов размечены (пиксель - по своему центру): кольцо ignore по границам лишало
     # сеть сигнала ровно там, где грань стены и откос проёма (датасеты версии 1)
     sem_out = sem.copy()
@@ -551,7 +586,7 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
 
 
 def unseen_to_outside(lab: dict, inp: np.ndarray, px: float, min_seen: float = 0.15, near_m: float = 0.3,
-                      no_station=None) -> int:
+                      no_station=None, policy: str = "outside") -> int:
     """Неотсканированное - улица. Помещение без стоянки (no_station: номера помещений + 1, как в
     room_id) или с видимым полом/потолком меньше чем на min_seen площади, и прилегающие к нему
     стены и проёмы - там, где точек нет ближе near_m, - класс «улица», расстояние до грани -
@@ -564,9 +599,17 @@ def unseen_to_outside(lab: dict, inp: np.ndarray, px: float, min_seen: float = 0
     ставших улицей."""
     import cv2
 
+    if policy not in ("outside", "ignore"):
+        raise ValueError("unseen policy must be outside or ignore")
     x = np.asarray(inp, np.float32)
     ev = ((x[0] > 0) | (x[1] > 0) | (x[2] > 0) | (x[3] > 0) | (x[4] > 0) | (x[5] > 0)).astype(np.uint8)
     seen = (x[3] > 0) | (x[4] > 0)
+    if policy == 'ignore':
+        near=cv2.dilate(ev,cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+            (2*max(1,int(round(near_m/px)))+1,)*2))>0
+        unknown=(lab['sem_raw']!=OUTSIDE)&~near
+        lab['sem'][unknown]=IGNORE
+        return int(unknown.sum())
     rid = lab["room_id"]
     n = int(rid.max()) + 1
     area = np.bincount(rid.ravel(), minlength=n)
@@ -586,7 +629,7 @@ def unseen_to_outside(lab: dict, inp: np.ndarray, px: float, min_seen: float = 0
     sem = lab["sem"]
     struct = np.isin(lab["sem_raw"], (WALL, DOOR, WINDOW, OPENING))
     out = ~near & ((room_un & (rid > 0)) | (struct & adj)) & (sem != IGNORE) & (sem != OUTSIDE)
-    sem[out] = OUTSIDE
+    sem[out] = IGNORE if policy == "ignore" else OUTSIDE
     lab["dist"][0][out] = 1
     return int(out.sum())
 
@@ -628,6 +671,14 @@ def vector_doc(gt: SceneGT) -> dict:
         walls.append({"id": f"W{w.id}", "geometry": geom,
                       "thickness": round(float(w.thickness * math.sqrt(abs(np.linalg.det(gt.A)))), 4),
                       "is_exterior": w.kind == "exterior", "kind": w.kind})
+    for it in lay.items:
+        if it.label != 'column':continue
+        for k,b in enumerate(it.boxes):
+            q=gt.poly(_box_quad(b))
+            for j,(a,bp) in enumerate(zip(q,np.roll(q,-1,axis=0))):
+                walls.append({'id':f'C{it.id}_{k}_{j}',
+                    'geometry':{'type':'segment','p0':a.tolist(),'p1':bp.tolist()},
+                    'thickness':0.,'is_exterior':False,'kind':'column_face'})
     openings = []
     for o in lay.openings:
         w = lay.wall(o.wall_id)
@@ -692,12 +743,35 @@ def _split_of(key: str) -> str:
 
 def write_meta(root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    (root / "meta.json").write_text(json.dumps(meta_doc(), indent=1, ensure_ascii=False), encoding="utf-8")
+    from .dataset_contract import atomic_json
+    existing=root/'meta.json'
+    if existing.exists() and (root/'scenes').exists() and any((root/'scenes').iterdir()):
+        if json.loads(existing.read_text()).get('labels')!=LABELS_VERSION:
+            raise ValueError('Label contract changed; use a new output dataset')
+    atomic_json(existing,meta_doc())
+
+
+def validate_supervision_policy(root, policy):
+    """Refuse to resume a dataset using a different supervision contract."""
+    if policy not in ("outside", "ignore"):
+        raise ValueError("unseen policy must be outside or ignore")
+    root = Path(root)
+    marker = root / "supervision_policy.json"
+    if marker.exists():
+        previous = json.loads(marker.read_text(encoding="utf-8"))["unseen_policy"]
+        if previous != policy:
+            raise ValueError("Supervision policy changed; use a new output dataset")
+        return
+    elif (root / "scenes").exists() and any((root / "scenes").iterdir()) and policy != "outside":
+        raise ValueError("Existing unversioned dataset; use a new output for ignore policy")
+    root.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"unseen_policy": policy, "contract_version": 1}), encoding="utf-8")
 
 
 def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = False, thin: float = 0.0,
                 z_shift: float = 0.0, splits: bool = True, source=None, rot_deg: float = 0.0,
-                variant: str = "", log=print) -> list[str]:
+                variant: str = "", log=print, unseen_policy: str = "ignore",
+                preview: bool = True, max_level_error_m: float = .03) -> list[str]:
     """Сцена генератора -> dataset/scenes/<scene><variant>/<level>/. Вход - тем же
     растеризатором, что и для реальных файлов (из scan.e57 или, без записи на диск, из
     source=MemorySource); уровни - detect_levels, как у реальных (или эталонные, use_gt_levels).
@@ -705,10 +779,11 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
     растров одного скана. splits=False - не трогать splits/*.txt (их ведёт вызывающий).
     Возвращает записанные каталоги."""
     root = Path(root)
+    validate_supervision_policy(root, unseen_policy)
     write_meta(root)
     gt0 = SceneGT(scene_dir)
     gts = [gt0] + [SceneGT(scene_dir, k) for k in range(1, len(gt0.levels))]
-    levels = [{"floor_z": g.floor_z + z_shift, "ceiling_z": g.floor_z + z_shift + g.ceiling_h,
+    levels = [{"floor_z": g.floor_z, "ceiling_z": g.floor_z + g.ceiling_h,
                "height_m": g.ceiling_h} for g in gts] if use_gt_levels else None
     meta = gt0.doc.get("meta", {})
     seed, index = meta.get("seed", 0), meta.get("index", 0)
@@ -727,30 +802,45 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
     # (на реальных сканах она дорисовывала помещения в пустоте рядом с домом)
     pad = np.random.default_rng(rs + 7).uniform(0.5, 2.5, 4)
     try:
-        res = rasterize_points(source, px=px, levels=levels, thin=thin, z_shift=z_shift,
+        res = rasterize_points(source, px=px, levels=levels, thin=thin, reference_shift=z_shift,
                                seed=rs, rot=rot, pad_m=pad, log=log)
     finally:
         if own:
             source.close()
-    for g in gts:                                  # пол в растре сдвинут вместе с облаком
-        g.floor_z += z_shift
     # каждому этажу эталона - ближайший по полу найденный уровень (не дальше 0,5 м)
     pairs = []
     for g in gts:
         r = min(res, key=lambda r: abs(r["level"]["floor_z"] - g.floor_z))
         if abs(r["level"]["floor_z"] - g.floor_z) < 0.5 and all(r is not q for _, q in pairs):
             pairs.append((g, r))
+    if len(pairs)!=len(gts):raise ValueError('Missing or duplicate detected level')
+    for gt,r in pairs:
+        # Validate detection independently of the intentional reference perturbation.
+        fl=r['level']['floor_z']-z_shift
+        ce=r['level']['ceiling_z']-z_shift
+        if max(abs(fl-gt.floor_z),abs(ce-gt.floor_z-gt.ceiling_h))>max_level_error_m:
+            raise ValueError(f'Level reference error exceeds {max_level_error_m} m')
     scene_id = gt0.dir.name + variant
     out_dirs = []
     for k, (gt, r) in enumerate(pairs):
         d = root / "scenes" / scene_id / f"L{gt.level + 1}"
         d.mkdir(parents=True, exist_ok=True)
+        (d/'complete.json').unlink(missing_ok=True)
         lab = label_level(gt, r["frame"])
-        n_out = unseen_to_outside(lab, r["input"], px, no_station=[q.id + 1 for q in gt.layout.rooms if not q.scanned])
+        # Heights are interpreted relative to the estimated level at inference.
+        op=np.isin(lab['sem_raw'],(DOOR,WINDOW,OPENING))
+        estimated_h=r['level']['ceiling_z']-r['level']['floor_z']
+        lab['heights'][:,op]=np.clip((lab['heights'][:,op].astype(float)*gt.ceiling_h+
+            gt.floor_z-r['level']['floor_z'])/estimated_h,0,1)
+        physical_semantics = lab["sem"].copy()
+        n_out = unseen_to_outside(lab, r["input"], px, no_station=[q.id + 1 for q in gt.layout.rooms if not q.scanned], policy=unseen_policy)
         np.save(d / "input.npy", r["input"])
         import cv2
 
         cv2.imwrite(str(d / "sem.png"), lab["sem"])
+        np.save(d / "supervision_valid.npy", lab["sem"] != IGNORE)
+        cv2.imwrite(str(d / "semantic_truth.png"), physical_semantics)
+        np.save(d / "observation_support.npy", np.any(r["input"][:6] > 0, axis=0))
         np.save(d / "dist.npy", lab["dist"])
         np.save(d / "orient.npy", lab["orient"])
         np.save(d / "heights.npy", lab["heights"])
@@ -762,9 +852,16 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
               "floor_z_gt": gt.floor_z, "ceiling_z_gt": gt.floor_z + gt.ceiling_h,
               "frame": r["frame"], "pixel_to_world": affine(r["frame"]), "rasterizer": RASTERIZER_VERSION,
               "bare": meta.get("bare"), "aug": {"thin": thin, "z_shift": z_shift, "rot_deg": rot_deg},
-              "labels": LABELS_VERSION, "unseen_outside_px": n_out}
+              "labels": LABELS_VERSION, "unseen_policy": unseen_policy, "unseen_changed_px": n_out, "unseen_outside_px": n_out if unseen_policy == "outside" else 0}
         (d / "scene.json").write_text(json.dumps(sc, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
-        _preview(r["input"].astype(np.float32), lab["sem_raw"], d / "preview.png")
+        from .dataset_contract import atomic_json,finish_level
+        physical=vector_doc(gt)
+        atomic_json(d/'vector_physical.json',physical)
+        physical['evaluation_scope']={'frame':r['frame'],
+            'valid_runs':mask_runs(lab['sem']!=IGNORE)}
+        atomic_json(d/'vector.json',physical)
+        if preview:_preview(r['input'].astype(np.float32),lab['sem_raw'],d/'preview.png')
+        finish_level(d)
         out_dirs.append(str(d))
         if splits:
             _append_split(root, _split_of(sc["layout_key"]), f"{scene_id}/L{gt.level + 1}")
@@ -805,3 +902,20 @@ def build_real(e57, root, object_id: str | None = None, px: float = PIXEL_M, log
         _preview(r["input"].astype(np.float32), None, d / "preview.png")
         out.append(str(d))
     return out
+
+
+
+def mask_runs(mask):
+    flat=np.r_[False,mask.ravel(),False].astype(np.int8)
+    edges=np.flatnonzero(np.diff(flat))
+    return edges.reshape(-1,2).tolist()
+
+
+def accumulate_voxels(vox,indices):
+    # Bound temporary dense counts to 16 MB. Sparse scenes retain sorted counting.
+    if len(vox)<=2_000_000 and len(vox)<=4*len(indices):
+        counts=np.bincount(indices,minlength=len(vox))
+        vox[:]=np.minimum(vox.astype(np.uint32)+counts,65535).astype(np.uint16)
+    else:
+        u,c=np.unique(indices,return_counts=True)
+        vox[u]=np.minimum(vox[u].astype(np.int64)+c,65535).astype(np.uint16)

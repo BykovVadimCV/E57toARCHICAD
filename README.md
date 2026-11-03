@@ -1,5 +1,7 @@
 # DotCloudCONVERT
 
+Generator update: new builds use **labels-5 / metadata v3**. Unknown areas and training erasing default to ignore; builds require a fresh dataset directory. See [correctness, performance, and verification notes](tools/GENERATOR_V5.md). Older labels-4 instructions below describe the previous contract.
+
 Конвертер E57 → 2D растровый план. Сейчас в репозитории первый этап — **`simscan`**,
 синтезатор наборов данных: процедурные этажи, виртуальное сканирование наземным сканером
 (Open3D), запись E57 со станциями и позами через pye57 и точный эталон плана.
@@ -658,3 +660,24 @@ pip install torch pillow scipy ifcopenshell   # inference, cellplan, экспо�
 - `<файл>.ifc` - IFC, этаж на уровень; при выборе «оба» - `<файл>_vectorize.ifc` и
   `<файл>_cellplan.ifc`
 
+
+
+### Experimental visible-face wall fitting
+
+`--fit-mode face_first` enables XYZ wall-face refinement for `snap`, `infer --plan`,
+`analytics`, and `cellplan`. Cellplan writes refined world plans and drawings under
+`fitted/`. The mode retains input width as an explicit assumption when only one face is
+observed and records local support, ambiguity, junction edits and final consistency checks.
+Legacy remains the default because real benchmark results are mixed. See
+[tools/FACE_FIRST.md](tools/FACE_FIRST.md) for behavior, limitations and paired-run commands.
+
+Face-first fitting now uses a raw-return density gate by default:
+`--min-wall-density 10000` (25 returns per 5 × 5 cm surface tile). Use `0` for the ungated
+comparison. Thresholded density heat maps leave rejected tiles white using the actual
+fitting mask; unfiltered returns appear only in the labeled raw-reference panel.
+
+`--wall-rules` adds model-outside exclusion before density sampling, a contour constraint,
+an apartment-axis preference, and shorter local proposals to face-first fitting. Supply
+`--pred` with snap/cellplan. `--max-fit-segment`, `--near-axis-deg`, and `--contour-margin`
+control the new profile. See [tools/WALL_RULES.md](tools/WALL_RULES.md) for assumptions,
+opening/width handling and the benchmark trade-offs.
