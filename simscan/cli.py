@@ -69,6 +69,7 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     md = sub.add_parser("make-dataset", help="сцены -> сразу датасет сети плана (сканы удаляются)")
     md.add_argument("--out", required=True, help="корень датасета")
+    md.add_argument("--unseen-policy", choices=["outside", "ignore"], default="ignore")
     md.add_argument("--count", type=int, default=100)
     md.add_argument("--seed", type=int, default=0)
     md.add_argument("--start", type=int, default=0, help="номер первой сцены (разные машины - разные диапазоны)")
@@ -94,6 +95,7 @@ def main(argv: list[str] | None = None) -> None:
     tr.add_argument("--weighted-sampling", action="store_true", help="weighted sampling для баланса классов")
     tr.add_argument("--use-focal", action="store_true", help="использовать Focal Loss вместо обычного CE")
     tr.add_argument("--init", help="новый прогон с весов готовой модели (best.pt): дообучение")
+    tr.add_argument("--erasing-policy", choices=["legacy", "ignore"], default="ignore")
     tr.add_argument("--vec-every", type=int, default=5,
                     help="каждые N эпох - план на уровнях val и выбор best.pt по нему (0 - по mIoU)")
     tr.add_argument("--vec-levels", type=int, default=48, help="уровней val для проверки плана")
@@ -102,6 +104,12 @@ def main(argv: list[str] | None = None) -> None:
     inf.add_argument("paths", nargs="+")
     inf.add_argument("--out", required=True)
     inf.add_argument("--tile", type=int, default=512)
+    inf.add_argument("--fit-mode", choices=["legacy", "face_first"], default="legacy", help="wall fitting for --plan")
+    inf.add_argument("--min-wall-density", type=float, default=10000., help="face_first: minimum raw returns/m² in local surface tiles; 0 disables gate")
+    inf.add_argument("--wall-rules", action="store_true", help="model outside exclusion, contour bounds, near-axis preference and shorter local proposals")
+    inf.add_argument("--max-fit-segment", type=float, default=1.2, help="maximum local fitting length in metres, except protected opening spans")
+    inf.add_argument("--near-axis-deg", type=float, default=7., help="angular range of the strong apartment-axis preference")
+    inf.add_argument("--contour-margin", type=float, default=.10, help="explicit model boundary allowance in metres")
     inf.add_argument("--tta", nargs="?", const="flip", default="none", choices=["none", "flip", "d4"],
                      help="Test-Time Augmentation: flip - 4 отражения (по умолчанию для --tta), d4 - 8 вариантов")
     inf.add_argument("--plan", action="store_true",
@@ -146,6 +154,12 @@ def main(argv: list[str] | None = None) -> None:
     src_ = an.add_mutually_exclusive_group()
     src_.add_argument("--model", help="чекпойнт сети: прогнать её")
     src_.add_argument("--pred", help="готовый каталог infer этого файла (уровни с prob.npz, scene.json)")
+    an.add_argument("--fit-mode", choices=["legacy", "face_first"], default="legacy", help="XYZ visible-face wall refinement")
+    an.add_argument("--min-wall-density", type=float, default=10000., help="face_first: minimum raw returns/m² in local surface tiles; 0 disables gate")
+    an.add_argument("--wall-rules", action="store_true", help="model outside exclusion, contour bounds, near-axis preference and shorter local proposals")
+    an.add_argument("--max-fit-segment", type=float, default=1.2, help="maximum local fitting length in metres, except protected opening spans")
+    an.add_argument("--near-axis-deg", type=float, default=7., help="angular range of the strong apartment-axis preference")
+    an.add_argument("--contour-margin", type=float, default=.10, help="explicit model boundary allowance in metres")
     an.add_argument("--tta", choices=["none", "flip", "d4"], default="none")
     an.add_argument("--no-cellplan", action="store_true", help="без второго построителя (быстрее)")
     an.add_argument("--panoramas", action="store_true", help="добавить панорамы стоянок 2048 px (это фото объекта)")
@@ -167,12 +181,22 @@ def main(argv: list[str] | None = None) -> None:
     ds.add_argument("--out", required=True, help="корень датасета")
     ds.add_argument("--id", help="real: имя объекта (по умолчанию имя файла)")
     ds.add_argument("--px", type=float, default=0.02, help="пиксель, м")
+    ds.add_argument("--unseen-policy", choices=["outside", "ignore"], default="ignore", help="build: supervision for unobserved interior")
     ds.add_argument("--gt-levels", action="store_true", help="build: уровни из эталона, а не detect_levels")
     cp = sub.add_parser("cellplan", help="план: разбиение на ячейки по кандидатам стен и глобальная разметка")
     cp.add_argument("e57")
     cp.add_argument("--out", help="каталог (по умолчанию <файл>_cellplan рядом с файлом)")
     cp.add_argument("--px", type=float, default=0.01, help="размер пикселя, м")
     cp.add_argument("--pred", help="каталог infer для этого файла (prob.npz + scene.json по уровням)")
+    cp.add_argument("--objective-mode", choices=["legacy", "log_evidence"], default="legacy", help="experimental occupancy objective")
+    cp.add_argument("--fit-mode", choices=["legacy", "face_first"], help="also write cloud-fitted world plans under fitted/")
+    cp.add_argument("--min-wall-density", type=float, default=10000., help="face_first: minimum raw returns/m² in local surface tiles; 0 disables gate")
+    cp.add_argument("--wall-rules", action="store_true", help="model outside exclusion, contour bounds, near-axis preference and shorter local proposals")
+    cp.add_argument("--max-fit-segment", type=float, default=1.2, help="maximum local fitting length in metres, except protected opening spans")
+    cp.add_argument("--near-axis-deg", type=float, default=7., help="angular range of the strong apartment-axis preference")
+    cp.add_argument("--contour-margin", type=float, default=.10, help="explicit model boundary allowance in metres")
+    cp.add_argument("--structural-checks", action="store_true", help="audit every wall/opening and retain source room rings without changing geometry")
+    cp.add_argument("--coverage-mode", choices=["legacy", "supported"], default="legacy", help="experimental observation-aware seed reach")
     cp.add_argument("--net-w", type=float, default=1.0, help="вес вероятностей сети в задаче")
     cr = sub.add_parser("calib-real", help="всё для подгонки генератора из E57 в один zip")
     cr.add_argument("e57", nargs="+", help="файлы E57 (реальные или scan.e57 сцен)")
@@ -210,13 +234,26 @@ def main(argv: list[str] | None = None) -> None:
     imx.add_argument("--no-pano", action="store_true", help="без панорам стоянок (только снимки и cameras.json)")
     imx.add_argument("--pano-width", type=int, help="ширина панорамы (по умолчанию - по снимкам, до 8192)")
     sn = sub.add_parser("snap", help="привязка векторного плана к облаку E57 (грани стен - по точкам)")
+    sn.add_argument("--fit-mode", choices=["legacy", "face_first"], default="legacy", help="XYZ visible-face refinement with explicit assumed width")
+    sn.add_argument("--min-wall-density", type=float, default=10000., help="face_first: minimum raw returns/m² in local surface tiles; 0 disables gate")
+    sn.add_argument("--wall-rules", action="store_true", help="model outside exclusion, contour bounds, near-axis preference and shorter local proposals")
+    sn.add_argument("--max-fit-segment", type=float, default=1.2, help="maximum local fitting length in metres, except protected opening spans")
+    sn.add_argument("--near-axis-deg", type=float, default=7., help="angular range of the strong apartment-axis preference")
+    sn.add_argument("--contour-margin", type=float, default=.10, help="explicit model boundary allowance in metres")
     sn.add_argument("plan_json", nargs="+", help="plan.json уровней одного E57 (из vectorize / infer --plan)")
+    sn.add_argument("--pred", help="model prediction directory, required with --wall-rules")
     sn.add_argument("--e57", required=True, help="исходный E57")
     sn.add_argument("--out", help="куда записать (один план); по умолчанию - на место, исходный - plan_net.json")
     exp = sub.add_parser("export-ifc", help="экспорт векторного плана в IFC для ArchiCAD")
     exp.add_argument("plan_json", nargs="+", help="plan.json из vectorize (несколько - этажи одного IFC)")
     exp.add_argument("--out", required=True, help="выходной IFC файл (.ifc)")
     args = ap.parse_args(argv)
+    rules=None
+    if getattr(args,'wall_rules',False):
+        if args.fit_mode!='face_first':ap.error('--wall-rules requires --fit-mode face_first')
+        from .wallrules import WallRules
+        try:rules=WallRules(max_segment_m=args.max_fit_segment,near_axis_deg=args.near_axis_deg,contour_margin_m=args.contour_margin)
+        except ValueError as error:ap.error(str(error))
 
     if args.cmd == "assets":
         from . import assets
@@ -243,12 +280,12 @@ def main(argv: list[str] | None = None) -> None:
         print(train(args.data, args.out, epochs=args.epochs, batch=args.batch, crop=args.crop, lr=args.lr,
                     workers=args.workers, resume=args.resume, seed=args.seed, max_steps=args.max_steps,
                     accum_steps=args.accum_steps, weighted_sampling=args.weighted_sampling,
-                    use_focal=args.use_focal, init=args.init, vec_every=args.vec_every, vec_levels=args.vec_levels))
+                    use_focal=args.use_focal, init=args.init, vec_every=args.vec_every, vec_levels=args.vec_levels, erasing_policy=args.erasing_policy))
         return
     if args.cmd == "infer":
         from .infer import infer
 
-        infer(args.ckpt, args.paths, args.out, tile=args.tile, tta=args.tta, plan=args.plan, batch=args.batch)
+        infer(args.ckpt, args.paths, args.out, tile=args.tile, tta=args.tta, plan=args.plan, batch=args.batch, fit_mode=args.fit_mode, min_wall_density=args.min_wall_density,wall_rules=rules)
         return
     if args.cmd == "make-dataset":
         from .config import load_config
@@ -256,7 +293,7 @@ def main(argv: list[str] | None = None) -> None:
 
         cfg = load_config(args.config, _parse_set(args.set))
         make_dataset(cfg, args.out, args.count, args.seed, args.start, args.workers, work_dir=args.work_dir,
-                     keep_scans=args.keep_scans, variants=args.variants)
+                     keep_scans=args.keep_scans, variants=args.variants, unseen_policy=args.unseen_policy)
         return
     if args.cmd == "dataset":
         from .makedata import pack, rebuild_splits
@@ -271,7 +308,7 @@ def main(argv: list[str] | None = None) -> None:
             return
         for p in args.paths:
             if args.action == "build":
-                print("\n".join(build_scene(p, args.out, px=args.px, use_gt_levels=args.gt_levels)))
+                print("\n".join(build_scene(p, args.out, px=args.px, use_gt_levels=args.gt_levels, unseen_policy=args.unseen_policy)))
             else:
                 print("\n".join(build_real(p, args.out, object_id=args.id, px=args.px)))
         return
@@ -282,7 +319,7 @@ def main(argv: list[str] | None = None) -> None:
 
         src = Path(args.e57)
         out = Path(args.out) if args.out else src.with_name(src.stem + "_cellplan")
-        cellplan(src, out, px=args.px, pred=args.pred, net_w=args.net_w)
+        cellplan(src, out, px=args.px, pred=args.pred, net_w=args.net_w, coverage_mode=args.coverage_mode, objective_mode=args.objective_mode, structural_checks=args.structural_checks, fit_mode=args.fit_mode, min_wall_density=args.min_wall_density,wall_rules=rules)
         print(out)
         return
     if args.cmd == "calib-real":
@@ -333,7 +370,7 @@ def main(argv: list[str] | None = None) -> None:
         from .analytics import analytics
 
         print(analytics(args.e57, args.out, model=args.model, pred=args.pred, tta=args.tta,
-                        cellplan=not args.no_cellplan, panoramas=args.panoramas, max_file_mb=args.max_file_mb))
+                        cellplan=not args.no_cellplan, panoramas=args.panoramas, max_file_mb=args.max_file_mb, fit_mode=args.fit_mode, min_wall_density=args.min_wall_density,wall_rules=rules))
         return
     if args.cmd == "zones":
         from .zones import zones
@@ -387,7 +424,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "snap":
         from .cloudsnap import main_snap
 
-        main_snap(args.plan_json, args.e57, args.out)
+        main_snap(args.plan_json, args.e57, args.out, fit_mode=args.fit_mode, min_wall_density=args.min_wall_density,wall_rules=rules,model_predictions=args.pred)
         return
 
     if args.cmd == "export-ifc":
@@ -436,3 +473,4 @@ def main(argv: list[str] | None = None) -> None:
     if failed:
         print(f"ошибок: {len(failed)} из {len(results)}", file=sys.stderr)
         sys.exit(1)
+

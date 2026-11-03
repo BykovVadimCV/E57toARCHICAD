@@ -64,7 +64,7 @@ def make_layout(cfg: SynthConfig, rng: np.random.Generator, seed: int, index: in
 
 
 def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: int = 0,
-                   write_scan: bool = True) -> dict:
+                   write_scan: bool = True, training_only: bool = False) -> dict:
     """write_scan=False - scan.e57 и метки точек не пишутся, сканы с записанными позами
     возвращаются в summary["_scans"] = (scans, poses) (make-dataset растеризует их из памяти)."""
     t_start = time.perf_counter()
@@ -73,6 +73,7 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
     (out / "labels").mkdir(parents=True, exist_ok=True)
 
     layout = make_layout(cfg, rng, seed, index)
+    t_layout=time.perf_counter()
     real = realism.sample_params(cfg.realism, rng)
     if real["enabled"]:
         realism.jitter_thickness(layout, cfg.realism.thickness_jitter_mm, rng)
@@ -118,6 +119,7 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
         xy = realism.warp_xy(np.array(st.position[:2])[None], real)[0]
         st.position = (float(xy[0]), float(xy[1]), st.position[2])
 
+    t_mesh=time.perf_counter()
     ex = cfg.export
     world = WorldTransform(
         float(rng.uniform(0, 360)) if ex.world_yaw else 0.0,
@@ -159,6 +161,7 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
             "mixed": int(scan.mixed.sum()), "virtual": int(scan.virtual.sum()),
         })
 
+    t_scanned=time.perf_counter()
     names = [f"Station_{s.id + 1:03d}" for s in stations]
     masks_written = write_e57(out / "scan.e57", scans, poses, names, cfg.effects.keep_invalid) \
         if write_scan else []
@@ -178,20 +181,21 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
         write_merged_e57(out / "scan_merged.e57", np.vstack(pts), np.concatenate(inten),
                          stations=[t for _, t in poses], spacing_m=ex.merged_spacing_mm / 1000)
 
-    frame = frame_for(layout, ex.pixel_mm, ex.pad_m)
-    masks = build_masks(layout, solids, frame, ex.cut_height_m)
-    info = describe(layout, masks, frame, world, ex.cut_height_m)
-    info["stations"] = station_info
-    if ex.unet_mask:
-        uframe = unet_frame(layout, ex.unet_target_wall_px, ex.pad_m)
-        info["unet"] = {"frame": asdict(uframe), "target_wall_px": ex.unet_target_wall_px,
-                        "values": UNET_VALUES, "file": "unet_mask.png"}
-    save_gt(out / "gt", masks, info)
-    if ex.unet_mask:
-        import cv2
+    if not training_only:
+        frame = frame_for(layout, ex.pixel_mm, ex.pad_m)
+        masks = build_masks(layout, solids, frame, ex.cut_height_m)
+        info = describe(layout, masks, frame, world, ex.cut_height_m)
+        info["stations"] = station_info
+        if ex.unet_mask:
+            uframe = unet_frame(layout, ex.unet_target_wall_px, ex.pad_m)
+            info["unet"] = {"frame": asdict(uframe), "target_wall_px": ex.unet_target_wall_px,
+                            "values": UNET_VALUES, "file": "unet_mask.png"}
+        save_gt(out / "gt", masks, info)
+        if ex.unet_mask:
+            import cv2
 
-        cv2.imwrite(str(out / "gt" / "unet_mask.png"),
-                    unet_mask(layout, solids, uframe, ex.cut_height_m))
+            cv2.imwrite(str(out / "gt" / "unet_mask.png"),
+                        unet_mask(layout, solids, uframe, ex.cut_height_m))
 
     doc = layout.to_dict()
     doc["meta"].update({
@@ -214,17 +218,20 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
     summary = {"dir": str(out), "levels": 2 if duplex else 1, "rooms": len(layout.rooms), "stations": len(stations),
                "openings": len(layout.openings), "items": len(layout.items),
                "points_valid": int(sum(s.n_valid for s in scans))}
-    if ex.preview and write_scan:
+    if ex.preview and write_scan and not training_only:
         summary.update(render_preview(out / "scan.e57", masks, frame, world, out / "preview.png"))
-    if ex.free_space_input and ex.unet_mask and write_scan:
+    if ex.free_space_input and ex.unet_mask and write_scan and not training_only:
         from .rasterize import make_pair
 
         pair = make_pair(out, figure=ex.debug)
         summary["input_wall_iou"] = pair["wall_iou"]
-    if ex.debug:
+    if ex.debug and not training_only:
         from .debug import debug_scene
 
         debug_scene(out)
+    summary['timings']={'layout_s':round(t_layout-t_start,3),
+        'scene_build_s':round(t_mesh-t_layout,3),'scan_s':round(t_scanned-t_mesh,3),
+        'export_s':round(time.perf_counter()-t_scanned,3)}
     summary["seconds"] = round(time.perf_counter() - t_start, 2)
     if not write_scan:
         summary["_scans"] = (scans, poses)
@@ -260,4 +267,5 @@ def generate_dataset(cfg: SynthConfig, out_root: str | Path, count: int, seed: i
         for r in results:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
     return results
+
 

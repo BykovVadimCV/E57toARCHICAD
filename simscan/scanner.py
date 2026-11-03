@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from dataclasses import dataclass
 
 import numpy as np
@@ -65,10 +66,14 @@ class ScanResult:
 
 def ray_grid(cfg: ScannerConfig):
     """Направления лучей в СК сканера: строки сверху вниз, столбцы по азимуту 0..360."""
-    step = cfg.angular_step_deg
+    return _cached_ray_grid(cfg.angular_step_deg,cfg.elevation_min_deg,cfg.elevation_max_deg)
+
+
+@lru_cache(maxsize=1)
+def _cached_ray_grid(step,elevation_min_deg,elevation_max_deg):
     ncol = int(round(360.0 / step))
-    el_top = cfg.elevation_max_deg - (step / 2 if cfg.elevation_max_deg >= 90.0 else 0.0)
-    nrow = int(math.floor((el_top - cfg.elevation_min_deg) / step + 1e-9)) + 1
+    el_top = elevation_max_deg - (step / 2 if elevation_max_deg >= 90.0 else 0.0)
+    nrow = int(math.floor((el_top - elevation_min_deg) / step + 1e-9)) + 1
     if nrow > 65535 or ncol > 65535:
         raise ValueError("сетка не помещается в uint16 rowIndex/columnIndex")
     el = np.radians(el_top - np.arange(nrow) * step)
@@ -78,7 +83,9 @@ def ray_grid(cfg: ScannerConfig):
                      np.broadcast_to(np.sin(el)[:, None], (nrow, ncol))], -1)
     rows = np.repeat(np.arange(nrow, dtype=np.uint16), ncol)
     cols = np.tile(np.arange(ncol, dtype=np.uint16), nrow)
-    return dirs.reshape(-1, 3), rows, cols, nrow, ncol
+    dirs=dirs.reshape(-1,3)
+    for a in (dirs,rows,cols):a.setflags(write=False)
+    return dirs, rows, cols, nrow, ncol
 
 
 def _station_spots(g, cfg: ScannerConfig) -> np.ndarray:
@@ -451,3 +458,4 @@ class ScanSimulator:
         flat = T2.reshape(-1)
         t[pick.reshape(-1)] = flat[pick.reshape(-1)]
         return pick.reshape(-1)
+

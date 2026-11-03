@@ -62,7 +62,7 @@ class SceneMesh:
         """tessellation - шаг сетки для тел с deform=True (None - без разбиения)."""
         plain = [s for s in solids if s.mesh is None and not (tessellation and s.deform)]
         other = [s for s in solids if not (s.mesh is None and not (tessellation and s.deform))]
-        out = cls._from_boxes(plain)
+        parts = [cls._from_boxes(plain)]
         for s in other:
             v, t = s.mesh if s.mesh is not None else _box_mesh(s.box, tessellation)
             n = len(t)
@@ -72,8 +72,16 @@ class SceneMesh:
                        [{"instance": s.instance, "label": s.label, "source": s.source}],
                        np.full(n, s.transmit, np.float32),
                        np.full(len(v), bool(s.deform and s.mesh is None), bool))
-            out = out.concatenate(part)
-        return out
+            parts.append(part)
+        offsets=np.cumsum([0]+[len(p.vertices) for p in parts[:-1]])
+        return cls(np.concatenate([p.vertices for p in parts]),
+            np.concatenate([p.triangles+np.uint32(off) for p,off in zip(parts,offsets)]),
+            np.concatenate([p.tri_label for p in parts]),
+            np.concatenate([p.tri_instance for p in parts]),
+            np.concatenate([p.tri_reflectance for p in parts]),
+            [i for p in parts for i in p.instances],
+            np.concatenate([p.tri_transmit for p in parts]),
+            np.concatenate([p.vert_deform for p in parts]))
 
     @classmethod
     def _from_boxes(cls, solids: list[Solid]) -> "SceneMesh":
@@ -380,3 +388,4 @@ def surface_distance(points: np.ndarray, solids: list[Solid], chunk: int = 4096)
         inside = np.minimum(q.max(-1), 0)
         out[a:a + chunk] = np.abs(outside + inside).min(1)
     return out
+

@@ -47,6 +47,10 @@ def load_level(d: Path) -> dict:
         out["dist"] = np.load(d / "dist.npy").astype(np.float32)
         out["orient"] = np.load(d / "orient.npy").astype(np.float32)
         out["heights"] = np.load(d / "heights.npy").astype(np.float32)
+    if (d / "supervision_valid.npy").exists():
+        out["supervision_valid"] = np.load(d / "supervision_valid.npy").astype(bool)
+        if out["supervision_valid"].shape != out["input"].shape[-2:]:
+            raise ValueError("supervision_valid shape does not match input")
     return out
 
 
@@ -77,10 +81,14 @@ class FloorplanSamples:
     def __init__(self, root, split: str = "train", crop: int | None = 512, train: bool = True,
                  channel_dropout: float = 0.1, multiplicative_noise: float = 0.15,
                  additive_noise: float = 0.05, random_erasing: float = 0.3,
-                 weighted_sampling: bool = True, seed: int = 0, unseen_outside: bool = True):
+                 weighted_sampling: bool = True, seed: int = 0, unseen_outside: bool = False,
+                 erasing_policy: str = "ignore"):
+        if erasing_policy not in ("legacy", "ignore"):
+            raise ValueError("erasing_policy must be legacy or ignore")
+        self.erasing_policy = erasing_policy
         self.root = Path(root)
         self.meta = json.loads((self.root / "meta.json").read_text(encoding="utf-8"))
-        self.unseen_outside = unseen_outside and int(self.meta.get("version", 1)) >= 2
+        self.unseen_outside = unseen_outside and int(self.meta.get("version", 1)) == 2
         f = self.root / "splits" / f"{split}.txt"
         self.items = [x for x in f.read_text(encoding="utf-8").split() if x] if f.exists() else []
         self.crop, self.train, self.p_drop = crop, train, channel_dropout
@@ -150,10 +158,13 @@ class FloorplanSamples:
                     factor = 1.0 + self.rng.uniform(-self.mult_noise, self.mult_noise)
                     inp[c] = np.clip(inp[c] * factor, 0, 1)
 
-        # 2. Additive noise на все каналы
+        # Noise models measured values, never new returns or binary visibility.
         if self.add_noise > 0:
-            noise = self.rng.uniform(-self.add_noise, self.add_noise, (C, H, W)).astype(np.float32)
-            inp = np.clip(inp + noise, 0, 1)
+            for c in (0, 1, 2, 5, 6):
+                if c < C:
+                    measured = inp[c] > 0
+                    noise = self.rng.uniform(-self.add_noise, self.add_noise, (H, W)).astype(np.float32)
+                    inp[c] = np.where(measured, np.clip(inp[c] + noise, 0, 1), 0)
 
         # 3. Random erasing (cutout): 1-2 прямоугольника, в разметке - ignore
         if self.p_erase > 0 and self.rng.random() < self.p_erase:
@@ -172,7 +183,8 @@ class FloorplanSamples:
                 inp[:, y:y + hole_h, x:x + hole_w] = 0.0
                 if "sem" in s:
                     hole = s["sem"][y:y + hole_h, x:x + hole_w]
-                    if self.unseen_outside:                 # нет точек - нет помещения; поля кропа - как были
+                    if getattr(self, "erasing_policy", "ignore") == "legacy":  # compatibility policy; optional ignore erasing
+                        # нет точек - нет помещения; поля кропа - как были
                         s["dist"][:, y:y + hole_h, x:x + hole_w][:, hole != IGNORE] = 1.0
                         hole[hole != IGNORE] = OUTSIDE
                     else:
@@ -187,6 +199,8 @@ class FloorplanSamples:
             m = s["sem"] == IGNORE
             s["sem"][m] = OUTSIDE
             s["dist"][0][m] = 1.0
+        if "supervision_valid" in s and "sem" in s:
+            s["sem"][~s["supervision_valid"]] = IGNORE
         if self.crop:
             s = self._crop(s)
         if self.train:
@@ -240,3 +254,4 @@ def make_weighted_sampler(dataset, seed: int = 0):
         return WeightedRandomSampler(weights, len(weights), replacement=True,
                                     generator=torch.Generator().manual_seed(seed))
     return None
+

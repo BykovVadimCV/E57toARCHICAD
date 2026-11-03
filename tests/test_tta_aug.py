@@ -79,12 +79,12 @@ def test_unseen_and_erased_are_outside(tmp_path):
     sem[40:60, 40:60] = IGNORE                                # неотснятая комната
     cv2.imwrite(str(d / "sem.png"), sem)
     (tmp_path / "meta.json").write_text(json.dumps({"version": 2}), encoding="utf-8")
-    ds = FloorplanSamples(tmp_path, "train", crop=None, train=False)
+    ds = FloorplanSamples(tmp_path, "train", crop=None, train=False, unseen_outside=True)
     s = ds[0]
     assert (s["sem"][40:60, 40:60] == 0).all() and (s["dist"][0][40:60, 40:60] == 1).all()
     assert (s["sem"] != IGNORE).all() and (s["sem"][:30, :30] == 1).all()
     ds = FloorplanSamples(tmp_path, "train", crop=None, channel_dropout=0.0, multiplicative_noise=0.0,
-                          additive_noise=0.0, random_erasing=1.0, weighted_sampling=False, seed=3)
+                          additive_noise=0.0, random_erasing=1.0, weighted_sampling=False, seed=3, erasing_policy="legacy", unseen_outside=True)
     for _ in range(20):
         s = ds[0]
         erased = (s["input"] == 0).all(0)
@@ -92,3 +92,4 @@ def test_unseen_and_erased_are_outside(tmp_path):
         assert (s["sem"][erased] == 0).all() and (s["dist"][0][erased] == 1).all()
         assert not s["mask_orient"][erased].any() and not s["mask_heights"][erased].any()
         assert (s["sem"] != IGNORE).all()
+

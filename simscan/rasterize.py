@@ -234,7 +234,10 @@ def detect_levels(points: np.ndarray, min_share: float = 0.15, min_height: float
             if not fls:
                 continue
             n_max, a_max = max(q["n"] for q in fls), max(q["area"] for q in fls)
-            fl = max((q for q in fls if q["n"] >= n_max / 3 and q["area"] >= a_max / 3), key=lambda q: q["z"])
+            # Coverage, not return count: lower ceilings may be scanned many more times.
+            eligible=[q for q in fls if q['area']>=a_max/2]
+            if not eligible:continue
+            fl=max(eligible,key=lambda q:q['z'])
             ces = [q for q in planes if min_height <= q["z"] - fl["z"] <= max_height and q["z"] > sz]
             if not ces:
                 continue
@@ -476,3 +479,4 @@ def pair_sheet(items: list[dict], path: Path) -> None:
                         bottom=0.45 / (3.9 * n + 0.6))
     fig.savefig(path, dpi=90)
     plt.close(fig)
+
