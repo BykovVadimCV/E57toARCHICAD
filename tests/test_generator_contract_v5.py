@@ -154,3 +154,15 @@ def test_voxel_dense_and_sparse_saturate_identically():
         ids=np.r_[np.full(1000,5),np.full(3,7)]
         accumulate_voxels(x,ids)
         assert x[5]==65535 and x[7]==3 and x.sum(dtype=np.int64)==65538
+
+
+def test_json_uses_utf8_even_with_windows_locale(tmp_path,monkeypatch):
+    from simscan import dataset_contract as c
+    original=c.tempfile.NamedTemporaryFile
+    def windows_default(*args,**kwargs):
+        kwargs.setdefault('encoding','cp1251')
+        return original(*args,**kwargs)
+    monkeypatch.setattr(c.tempfile,'NamedTemporaryFile',windows_default)
+    doc={'orientation':'cos 2θ','label':'проём 🧱'}
+    c.atomic_json(tmp_path/'meta.json',doc)
+    assert json.loads((tmp_path/'meta.json').read_bytes().decode('utf-8'))==doc

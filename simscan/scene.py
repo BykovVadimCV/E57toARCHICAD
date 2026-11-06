@@ -354,7 +354,7 @@ class SceneBuilder:
                     self._add(Box(((x0 + x1) / 2, (y0 + y1) / 2, r.floor_z - t / 2), (x1 - x0, y1 - y0, t)), label,
                               refl, f"slab:balcony{r.id}", inst, deform=True)
         for r in self.layout.rooms:
-            if r.ceiling_z < H - 1e-6:
+            if not r.open_sky and r.ceiling_z < H - 1e-6:
                 inst = self._new_instance()
                 for a, b, c, d in r.rects():
                     box = Box(((a + c) / 2, (b + d) / 2, r.ceiling_z + 0.01), (c - a, d - b, 0.02))

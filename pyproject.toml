@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "E57 -> 2D raster floor plan converter; simscan synthetic dataset generator"
 requires-python = ">=3.10"
 dependencies = [
+    "shapely>=2.0,<3",
     "numpy>=2.0",
     "scipy>=1.11",
     "open3d>=0.18",
@@ -32,3 +33,4 @@ include = ["simscan*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+

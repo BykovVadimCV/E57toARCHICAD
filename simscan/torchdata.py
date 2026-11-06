@@ -37,7 +37,10 @@ WALLISH = (2, 3, 4, 5)
 OPENINGS = (3, 4, 5)
 
 
-def load_level(d: Path) -> dict:
+AUX_NAMES = ("stair_footprint", "floor_opening", "ceiling_opening", "railing", "landing")
+
+
+def load_level(d: Path, use_aux: bool = False) -> dict:
     import cv2
 
     d = Path(d)
@@ -51,6 +54,18 @@ def load_level(d: Path) -> dict:
         out["supervision_valid"] = np.load(d / "supervision_valid.npy").astype(bool)
         if out["supervision_valid"].shape != out["input"].shape[-2:]:
             raise ValueError("supervision_valid shape does not match input")
+    if use_aux:
+        shape = out["input"].shape[-2:]
+        path = d / "structure_aux.npz"
+        out["aux"] = np.zeros((len(AUX_NAMES), *shape), np.float32)
+        out["aux_valid"] = np.zeros((len(AUX_NAMES), *shape), bool)
+        if path.exists():
+            with np.load(path, allow_pickle=False) as data:
+                for i, name in enumerate(AUX_NAMES):
+                    if name not in data: continue
+                    if data[name].shape != shape: raise ValueError(f"Auxiliary mask {name} shape does not match input")
+                    out["aux"][i] = data[name].astype(np.float32)
+                    out["aux_valid"][i] = True
     return out
 
 
@@ -82,10 +97,11 @@ class FloorplanSamples:
                  channel_dropout: float = 0.1, multiplicative_noise: float = 0.15,
                  additive_noise: float = 0.05, random_erasing: float = 0.3,
                  weighted_sampling: bool = True, seed: int = 0, unseen_outside: bool = False,
-                 erasing_policy: str = "ignore"):
+                 erasing_policy: str = "ignore", use_aux: bool = False):
         if erasing_policy not in ("legacy", "ignore"):
             raise ValueError("erasing_policy must be legacy or ignore")
         self.erasing_policy = erasing_policy
+        self.use_aux = use_aux
         self.root = Path(root)
         self.meta = json.loads((self.root / "meta.json").read_text(encoding="utf-8"))
         self.unseen_outside = unseen_outside and int(self.meta.get("version", 1)) == 2
@@ -181,6 +197,7 @@ class FloorplanSamples:
                 y = int(self.rng.integers(0, H - hole_h + 1)) if hole_h < H else 0
                 x = int(self.rng.integers(0, W - hole_w + 1)) if hole_w < W else 0
                 inp[:, y:y + hole_h, x:x + hole_w] = 0.0
+                if "aux_valid" in s: s["aux_valid"][:, y:y + hole_h, x:x + hole_w] = False
                 if "sem" in s:
                     hole = s["sem"][y:y + hole_h, x:x + hole_w]
                     if getattr(self, "erasing_policy", "ignore") == "legacy":  # compatibility policy; optional ignore erasing
@@ -194,7 +211,7 @@ class FloorplanSamples:
         return s
 
     def __getitem__(self, idx: int) -> dict:
-        s = load_level(self.root / "scenes" / self.items[idx])
+        s = load_level(self.root / "scenes" / self.items[idx], use_aux=self.use_aux)
         if self.unseen_outside and "sem" in s:
             m = s["sem"] == IGNORE
             s["sem"][m] = OUTSIDE

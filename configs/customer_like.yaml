@@ -9,8 +9,18 @@
 #   python -m simscan generate --config configs/customer_like.yaml --count 100 --out out
 layout:
   p_duplex: 0.25                 # двухуровневые квартиры: лестница, проём в перекрытии (класс 7)
+  door_margin_m: 0.12            # more short wall returns at door junctions
+  window_margin_m: 0.18          # short window piers remain possible
+  duplex_slab_m: [0.12, 0.55]  # broader assemblies; not a measured KZN slab thickness
+  duplex_p_turning: 0.35       # two flights and a landing when space permits
+  duplex_p_upper_terrace: 0.2  # convert an eligible exterior upper room
   duplex_p_spiral: 0.15
 scanner:
+  station_random_fraction: 0.35  # mix random and farthest-point station placements
+  p_limited_ceiling_view: 0.15  # acquisition variation; not a claim about a particular scanner
+  limited_elevation_max_deg: [25.0, 55.0]
+  p_room_unscanned: 0.12
+  unscanned_kinds: [corridor, room, kitchen, bath]
   angular_step_deg: 0.1          # 0,0667 у BLK360; 0,1 - быстрее, плотность в растре 2 см та же
   elevation_min_deg: -60.0
   elevation_max_deg: 90.0
@@ -33,6 +43,8 @@ effects:
   people: false
   registration_sigma_mm: [2.0, 6.0]   # толщина линии стены 4,4 см у заказчика против 3,7 при (1, 4)
 interior:
+  p_leaning_board: 0.4  # wall-like clutter in eligible furnished rooms
+  p_clutter_group: 0.3  # groups of non-structural vertical panels
   p_bare: 0.6                    # квартиры под отделку, как у заказчика; остальные - с мебелью для общности
   mess: [0.3, 1.0]
   radiators: true

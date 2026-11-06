@@ -120,6 +120,11 @@ def place_stations(layout: Layout, grids: dict, cfg: ScannerConfig,
             d = np.min(np.linalg.norm(pts[:, None] - np.array(chosen)[None], axis=2), axis=1)
             if d.max() < 1.0:
                 break
+            if cfg.station_random_fraction > 0 and rng.random() < cfg.station_random_fraction:
+                available = np.flatnonzero(d >= .5)
+                if len(available):
+                    chosen.append(pts[int(rng.choice(available))])
+                    continue
             chosen.append(pts[int(np.argmax(d))])
         for x, y in chosen:
             z = float(rng.uniform(*cfg.height_m)) + room.floor_z      # над своим полом (балкон ниже)

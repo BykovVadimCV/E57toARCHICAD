@@ -1,5 +1,7 @@
 # DotCloudCONVERT
 
+Colab dataset generation: [notebook](notebooks/colab_generate_dataset_labels5.ipynb) — local-disk generation, verified Drive checkpoints, automatic worker limits and a final training ZIP. [Usage notes](tools/COLAB_DATASET.md).
+
 Generator update: new builds use **labels-5 / metadata v3**. Unknown areas and training erasing default to ignore; builds require a fresh dataset directory. See [correctness, performance, and verification notes](tools/GENERATOR_V5.md). Older labels-4 instructions below describe the previous contract.
 
 Конвертер E57 → 2D растровый план. Сейчас в репозитории первый этап — **`simscan`**,
@@ -409,6 +411,13 @@ cutout - тоже улица: с ignore сеть там ничему не учи
 выпадение каналов; повороты на произвольный угол и прореживание - на облаке).
 
 ### Массовая сборка, обучение, применение
+
+Для объединённого датасета labels-5 используйте
+[Colab-ноутбук обучения](notebooks/colab_train_merged_labels5.ipynb) и
+[инструкцию](tools/TRAIN_MERGED_LABELS5.md). Он сохраняет `best_wall.pt` по IoU стен,
+возобновляет прогон с `last.pt` и строит отчёт на отложенном test.
+В labels-5 неотсканированные физические области и стёртые аугментацией пиксели
+по умолчанию имеют ignore; описание labels-4 выше относится к старым датасетам.
 
 ```bash
 # на машине с ядрами: сцена -> растр -> скан удаляется (~5 МБ на уровень вместо ~0,5 ГБ)

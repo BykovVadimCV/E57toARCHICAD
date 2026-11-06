@@ -7,6 +7,7 @@ best.pt - по плану, а не по пикселям: каждые --vec-eve
 применяется к --vec-levels уровням val целиком, план строит vectorize, vector_metrics сверяет
 его с vector.json, evaluate.geo_score сводит в одно число (стены 0,5, двери 0,3, окна 0,2).
 best_pixel.pt - по прежнему mIoU стены и проёмов. --vec-every 0 - только по mIoU (best.pt).
+best_wall.pt - отдельно по IoU класса «стена» на val, независимо от счёта проёмов и плана.
 На Colab --out лучше держать на Google Drive: сессия обрывается, а last.pt переживает обрыв.
 
 Продолжение с другим числом эпох (--epochs больше, чем было): расписание OneCycle уже прошло,
@@ -26,14 +27,14 @@ CLASS_WEIGHTS = (0.3, 0.5, 2.0, 4.0, 4.0, 3.0, 1.0, 2.0)   # улица, пом�
 SCORED = (2, 3, 4, 5)                                     # mIoU, по которому выбирается best.pt
 
 
-def _loaders(data, crop, batch, workers, seed, weighted_sampling: bool = False, erasing_policy: str = "ignore"):
+def _loaders(data, crop, batch, workers, seed, weighted_sampling: bool = False, erasing_policy: str = "ignore", use_aux: bool = False):
     import torch
     from torch.utils.data import DataLoader
 
     from .torchdata import torch_dataset, make_weighted_sampler
 
-    tr = torch_dataset(data, "train", crop=crop, train=True, seed=seed, weighted_sampling=weighted_sampling, erasing_policy=erasing_policy)
-    va = torch_dataset(data, "val", crop=None, train=False)          # val - уровни целиком
+    tr = torch_dataset(data, "train", crop=crop, train=True, seed=seed, weighted_sampling=weighted_sampling, erasing_policy=erasing_policy, use_aux=use_aux)
+    va = torch_dataset(data, "val", crop=None, train=False, use_aux=use_aux)          # val - уровни целиком
 
     def init(wid):                     # у каждого процесса загрузчика своя случайность аугментаций
         info = torch.utils.data.get_worker_info()
@@ -124,7 +125,7 @@ def vector_eval(model, dev, data, ids: list[str], tile: int = 512) -> dict:
 def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: float = 1e-3, workers: int = 2,
           resume: bool = False, seed: int = 0, amp: bool = True, max_steps: int | None = None,
           accum_steps: int = 1, weighted_sampling: bool = False, use_focal: bool = False,
-          init: str | None = None, vec_every: int = 5, vec_levels: int = 48, log=print, erasing_policy: str = "ignore") -> dict:
+          init: str | None = None, vec_every: int = 5, vec_levels: int = 48, log=print, erasing_policy: str = "ignore", use_aux: bool = False) -> dict:
     import torch
 
     from .net import PlanNet, losses
@@ -133,7 +134,7 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tl, vl = _loaders(data, crop, batch, workers, seed, weighted_sampling, erasing_policy)
+    tl, vl = _loaders(data, crop, batch, workers, seed, weighted_sampling, erasing_policy, use_aux)
     log(f"устройство {dev}; train {len(tl.dataset)}, val {len(vl.dataset)} уровней")
     if weighted_sampling:
         log("weighted sampling включён для баланса классов")
@@ -141,7 +142,7 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
         log("Focal Loss включён (gamma=2.0)")
     if accum_steps > 1:
         log(f"gradient accumulation: {accum_steps} шагов (эффективный batch={batch * accum_steps})")
-    model = PlanNet().to(dev)
+    model = PlanNet(aux_channels=5 if use_aux else 0).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     # шаг планировщика - на шаг оптимизатора, то есть раз в accum_steps батчей
     steps = epochs * max(len(tl) // max(accum_steps, 1), 1)
@@ -150,7 +151,7 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
                                                 pct_start=min(0.3, max(0.05, 2.5 / steps)))
     scaler = torch.amp.GradScaler(enabled=amp and dev.type == "cuda")
     cw = torch.tensor(CLASS_WEIGHTS, device=dev)
-    start, best, best_geo = 0, -1.0, -1.0
+    start, best, best_geo, best_wall = 0, -1.0, -1.0, -1.0
     per_epoch = max(len(tl) // max(accum_steps, 1), 1)
     if resume and (out / "last.pt").exists():
         ck = torch.load(out / "last.pt", map_location=dev, weights_only=False)
@@ -158,6 +159,7 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
         opt.load_state_dict(ck["opt"])
         scaler.load_state_dict(ck["scaler"])
         start, best, best_geo = ck["epoch"] + 1, ck["best"], ck.get("best_geo", -1.0)
+        best_wall = ck.get("best_wall", -1.0) if (out / "best_wall.pt").exists() else -1.0
         # лучших весов на диске нет (потерялись при обрыве) - рекорд не в счёт, следующая проверка их запишет
         if not (out / "best.pt").exists():
             best_geo = -1.0
@@ -177,7 +179,11 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
         from .infer import _state_dict
 
         ck0 = torch.load(init, map_location=dev, weights_only=False)
-        model.load_state_dict(_state_dict(ck0))
+        state = _state_dict(ck0)
+        bad = model.load_state_dict(state, strict=False)
+        allowed = {'aux.weight', 'aux.bias'} if use_aux else set()
+        if set(bad.missing_keys) - allowed or bad.unexpected_keys:
+            raise ValueError(f'Incompatible initialization weights: {bad}')
         log(f"веса из {init} (эпоха {ck0.get('epoch', '?') if isinstance(ck0, dict) else '?'}); оптимизатор и "
             "расписание - с нуля")
     val_ids = list(getattr(vl.dataset, "base", vl.dataset).items) if len(vl.dataset) else []
@@ -232,11 +238,15 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
                 f"p90 оси {vm.get('axis_err_cm_p90')} см, двери F1 {vm.get('door_f1')}, окна F1 "
                 f"{vm.get('window_f1')}) за {time.time() - t1:.0f} с")
         score = rec.get("miou_walls", -rec["total"])
-        net_cfg = {"in_channels": 8, "n_classes": 8, "width": 64}
+        net_cfg = {"in_channels": 8, "n_classes": 8, "width": 64, "aux_channels": 5 if use_aux else 0}
         geo = rec.get("vec_geo_score")
         # сначала лучшие, потом last.pt: обрыв между ними (Colab) не оставит в last.pt рекорд без его best.pt
         snap = {"model": model.state_dict(), "meta": meta, "net": net_cfg, "epoch": ep, "score": score,
                 "geo_score": geo}
+        wall_iou = rec.get("iou", [None] * 8)[2]
+        if wall_iou is not None and math.isfinite(wall_iou) and wall_iou > best_wall:
+            best_wall = float(wall_iou)
+            _save({**snap, "wall_iou": best_wall}, out / "best_wall.pt")
         if score > best:
             best = score
             _save(snap, out / ("best_pixel.pt" if vec_ids else "best.pt"))
@@ -246,7 +256,7 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
             log(f"  best.pt <- эпоха {ep} (счёт плана {geo:.3f})")
         ck = {"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
               "scaler": scaler.state_dict(), "epoch": ep, "best": best, "meta": meta, "net": net_cfg,
-              "best_geo": best_geo}
+              "best_geo": best_geo, "best_wall": best_wall}
         _save(ck, out / "last.pt")
         with open(out / "history.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -254,5 +264,5 @@ def train(data, out, epochs: int = 60, batch: int = 8, crop: int = 512, lr: floa
                                                       if "miou_walls" in rec else "") + f" ({rec['s']} с)")
         if max_steps and step >= max_steps:
             break
-    return {"best": best, "best_geo": best_geo, "out": str(out)}
+    return {"best": best, "best_geo": best_geo, "best_wall": best_wall, "out": str(out)}
 

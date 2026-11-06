@@ -34,7 +34,7 @@ def _vid(k: int) -> str:
 def _done(root: Path, scene_id: str, variants: int = 1) -> bool:
     from .dataset_contract import complete_level
     try:
-        manifest=json.loads((root/'completed'/(scene_id+'.json')).read_text())
+        manifest=json.loads((root/'completed'/(scene_id+'.json')).read_text(encoding='utf-8'))
         return manifest['variants']==variants and all(complete_level(root/'scenes'/d) for d in manifest['levels'])
     except (OSError,ValueError,KeyError):return False
 
@@ -98,7 +98,7 @@ def rebuild_splits(root) -> dict:
     if (root/'build_contract.json').exists():
         allowed=set()
         for m in (root/'completed').glob('*.json'):
-            allowed.update(json.loads(m.read_text())['levels'])
+            allowed.update(json.loads(m.read_text(encoding='utf-8'))['levels'])
     for f in sorted((root / "scenes").glob("*/L*/scene.json")):
         if allowed is not None and f.parent.relative_to(root/'scenes').as_posix() not in allowed:continue
         from .dataset_contract import complete_level
@@ -127,7 +127,7 @@ def make_dataset(cfg: SynthConfig, out_root, count: int, seed: int = 0, start: i
     build=json.loads(json.dumps(build,sort_keys=True))
     marker=root/'build_contract.json'
     if marker.exists():
-        if json.loads(marker.read_text())!=build:raise ValueError('Dataset build changed; use a new output dataset')
+        if json.loads(marker.read_text(encoding='utf-8'))!=build:raise ValueError('Dataset build changed; use a new output dataset')
     elif (root/'scenes').exists() and any((root/'scenes').iterdir()):
         raise ValueError('Unversioned dataset; use a new output dataset')
     atomic_json(marker,build)

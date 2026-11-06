@@ -13,7 +13,7 @@ REQUIRED = ('input.npy','sem.png','dist.npy','orient.npy','heights.npy',
 
 def atomic_json(path, doc):
     path=Path(path); path.parent.mkdir(parents=True,exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode='w',dir=path.parent,delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=path.parent,delete=False) as f:
         f.write(json.dumps(doc,ensure_ascii=False,indent=1));tmp=f.name
     os.replace(tmp,path)
 
@@ -39,7 +39,7 @@ def validate_level(folder):
         for n in ['sem','semantic_truth']:
             im=cv2.imread(str(folder/(n+'.png')),cv2.IMREAD_UNCHANGED)
             if im is None or im.shape!=shape:return False
-        for n in ['scene','vector','vector_physical']:json.loads((folder/(n+'.json')).read_text())
+        for n in ['scene','vector','vector_physical']:json.loads((folder/(n+'.json')).read_text(encoding='utf-8'))
         return True
     except (ValueError,OSError,KeyError):return False
 
@@ -54,6 +54,6 @@ def finish_level(folder):
 def complete_level(folder):
     folder=Path(folder)
     try:
-        doc=json.loads((folder/'complete.json').read_text())
+        doc=json.loads((folder/'complete.json').read_text(encoding='utf-8'))
         return all((folder/n).stat().st_size==doc['files'][n] for n in REQUIRED) and validate_level(folder)
     except (OSError,ValueError,KeyError):return False
