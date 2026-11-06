@@ -247,18 +247,26 @@ def rasterize_e57(path, px: float = PIXEL_M, levels: list | None = None, thin: f
 
 def rasterize_points(src, px: float = PIXEL_M, levels: list | None = None, thin: float = 0.0,
                      z_shift: float = 0.0, seed: int = 0, sample_points: int = 3_000_000,
-                     rot: tuple | None = None, pad_m=0.5, log=print, reference_shift: float = 0.) -> list[dict]:
+                     rot: tuple | None = None, pad_m=0.5, log=print, reference_shift: float = 0., frames: list[dict] | None = None) -> list[dict]:
     """Растеризатор входа сети по источнику точек (E57Source, MemorySource). Один и тот же
     код для реальных файлов и синтетики. rot - поворот облака (градусы, cx, cy); pad_m - поля
     кадра (датасет - случайные, см. build_scene)."""
     from .rasterize import detect_levels, floor_ceiling
 
+    if frames is not None:
+        if levels is None or len(frames)!=len(levels):
+            raise ValueError('Fixed frames require one explicit level per frame')
+        for fr in frames:
+            if not np.isclose(fr['pixel_m'],px) or any(int(fr[k])!=fr[k] or fr[k]<=0 for k in ('width','height')):
+                raise ValueError('Fixed frame dimensions/scale are invalid')
+            if not np.isfinite([fr['origin_x'],fr['origin_y'],px]).all() or px<=0:
+                raise ValueError('Fixed frame origin/scale is invalid')
     rng = np.random.default_rng(seed)
     p_keep = min(1.0, sample_points / max(src.total, 1))
     sample = []
-    for p in src.chunks():
+    for p in ([] if frames is not None else src.chunks()):
         sample.append(p[rng.random(len(p)) < p_keep].astype(np.float32))
-    sample = rotate_xy(np.concatenate(sample).astype(float), rot)
+    sample = rotate_xy(np.concatenate(sample).astype(float) if sample else np.empty((0,3)), rot)
     sample[:, 2] += z_shift
     st = rotate_xy(src.stations, rot) if len(src.stations) else src.stations
     if levels is None:
@@ -268,10 +276,13 @@ def rasterize_points(src, px: float = PIXEL_M, levels: list | None = None, thin:
             levels = [{"floor_z": fl, "ceiling_z": ce, "height_m": ce - fl}]
     levels=[dict(lv, floor_z=lv['floor_z']+reference_shift, ceiling_z=lv['ceiling_z']+reference_shift) for lv in levels]
     acc = []
-    for lv in levels:
+    for level_index, lv in enumerate(levels):
         top = lv["ceiling_z"] - lv["floor_z"]
-        m = frame_points(sample, [lv], st)
-        fr = _frame_from_points(sample[m, :2], px, pad_m)
+        if frames is None:
+            m = frame_points(sample, [lv], st)
+            fr = _frame_from_points(sample[m, :2], px, pad_m)
+        else:
+            fr = dict(frames[level_index])
         H, W = fr["height"], fr["width"]
         nz = max(1, int(math.floor((top - 2 * BAND_MARGIN_M) / Z_BIN_M)))
         acc.append({"level": lv, "frame": fr, "nz": nz, "top": top,
@@ -573,6 +584,33 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
         m = np.zeros((H, W), np.uint8)
         _fill(m, gt.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]), frame)
         sem[(m > 0) & np.isin(sem, (INTERIOR, CLUTTER))] = VOID
+    # Optional diagnostic masks: independent of the established 8-class labels.
+    # The stair footprint is present only on the lower level; the floor opening
+    # exists only on the upper level. A ceiling opening is recorded separately.
+    aux = {name: np.zeros((H, W), np.uint8) for name in
+           ('stair_footprint', 'floor_opening', 'ceiling_opening', 'railing', 'landing')}
+    duplex = lay.meta.get('duplex', {})
+    stair = duplex.get('stair', {})
+    if stair:
+        def aux_rect(name, rect):
+            if rect is None: return
+            x0, y0, x1, y1 = rect
+            _fill(aux[name], gt.poly([(x0,y0),(x1,y0),(x1,y1),(x0,y1)]), frame)
+        if int(lay.meta.get('level', gt.level)) == 0:
+            aux_rect('stair_footprint', stair.get('footprint'))
+            aux_rect('landing', stair.get('landing'))
+            aux_rect('ceiling_opening', stair.get('hole'))
+        else:
+            aux_rect('floor_opening', stair.get('hole'))
+        for item in lay.items:
+            for box in item.boxes:
+                sx, sy, sz = box.size
+                # Stair items contain both steps and flight guardrails. The
+                # latter are narrow posts or narrow, thin horizontal rails.
+                is_flight_rail = (item.kind == 'stairs' and min(sx, sy) <= .07 and
+                    (max(sx, sy) <= .07 or (sz <= .07 and max(sx, sy) >= .3)))
+                if item.kind == 'railing' or is_flight_rail:
+                    _fill(aux['railing'], gt.poly(_box_quad(box)), frame)
     # расстояние до видимой грани: граница тела стены (с проёмами) с помещением
     dist=distance_to_faces(gt,frame)
     # границы классов размечены (пиксель - по своему центру): кольцо ignore по границам лишало
@@ -581,7 +619,7 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
     mask = np.isin(sem, (WALL, DOOR, WINDOW, OPENING))
     ori[:, ~mask] = 0
     hts[:, ~np.isin(sem, (DOOR, WINDOW, OPENING))] = 0
-    return {"sem": sem_out, "sem_raw": sem, "dist": dist, "orient": ori.astype(np.float16),
+    return {"aux": aux, "sem": sem_out, "sem_raw": sem, "dist": dist, "orient": ori.astype(np.float16),
             "heights": hts.astype(np.float16), "room_id": room_id}
 
 
@@ -746,7 +784,7 @@ def write_meta(root: Path) -> None:
     from .dataset_contract import atomic_json
     existing=root/'meta.json'
     if existing.exists() and (root/'scenes').exists() and any((root/'scenes').iterdir()):
-        if json.loads(existing.read_text()).get('labels')!=LABELS_VERSION:
+        if json.loads(existing.read_text(encoding='utf-8')).get('labels')!=LABELS_VERSION:
             raise ValueError('Label contract changed; use a new output dataset')
     atomic_json(existing,meta_doc())
 
@@ -834,6 +872,7 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
             gt.floor_z-r['level']['floor_z'])/estimated_h,0,1)
         physical_semantics = lab["sem"].copy()
         n_out = unseen_to_outside(lab, r["input"], px, no_station=[q.id + 1 for q in gt.layout.rooms if not q.scanned], policy=unseen_policy)
+        np.savez_compressed(d / "structure_aux.npz", **lab["aux"])
         np.save(d / "input.npy", r["input"])
         import cv2
 
@@ -851,7 +890,7 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
               "floor_z": r["level"]["floor_z"], "ceiling_z": r["level"]["ceiling_z"],
               "floor_z_gt": gt.floor_z, "ceiling_z_gt": gt.floor_z + gt.ceiling_h,
               "frame": r["frame"], "pixel_to_world": affine(r["frame"]), "rasterizer": RASTERIZER_VERSION,
-              "bare": meta.get("bare"), "aug": {"thin": thin, "z_shift": z_shift, "rot_deg": rot_deg},
+              "bare": meta.get("bare"), "duplex": gt.layout.meta.get("duplex"), "aug": {"thin": thin, "z_shift": z_shift, "rot_deg": rot_deg},
               "labels": LABELS_VERSION, "unseen_policy": unseen_policy, "unseen_changed_px": n_out, "unseen_outside_px": n_out if unseen_policy == "outside" else 0}
         (d / "scene.json").write_text(json.dumps(sc, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
         from .dataset_contract import atomic_json,finish_level

@@ -63,6 +63,16 @@ def make_layout(cfg: SynthConfig, rng: np.random.Generator, seed: int, index: in
     raise ValueError(f"неизвестный layout.source: {lc.source}")
 
 
+def choose_scan_config(cfg, rng):
+    """Sample a scene-wide acquisition field of view; leave the original config intact."""
+    if cfg.p_limited_ceiling_view <= 0 or rng.random() >= cfg.p_limited_ceiling_view:
+        return cfg
+    lo, hi = cfg.limited_elevation_max_deg
+    if not cfg.elevation_min_deg < lo <= hi <= cfg.elevation_max_deg:
+        raise ValueError('limited_elevation_max_deg must be within scanner elevation range')
+    return replace(cfg, elevation_max_deg=float(rng.uniform(lo, hi)))
+
+
 def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: int = 0,
                    write_scan: bool = True, training_only: bool = False) -> dict:
     """write_scan=False - scan.e57 и метки точек не пишутся, сканы с записанными позами
@@ -127,7 +137,8 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
          float(rng.uniform(*ex.world_z_offset_m))),
     )
     params = sample_effect_params(cfg.effects, rng)
-    sim = ScanSimulator(mesh, cfg.scanner, cfg.effects, params, rng)
+    scan_cfg = choose_scan_config(cfg.scanner, rng)
+    sim = ScanSimulator(mesh, scan_cfg, cfg.effects, params, rng)
 
     scans, poses, station_info = [], [], []
     for k, st in enumerate(stations):
@@ -203,7 +214,9 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
         "layout_to_world": world.to_dict(), "effects_sampled": params,
         "realism": real,
         "scanner": {"nrow": sim.nrow, "ncol": sim.ncol,
-                    "angular_step_deg": cfg.scanner.angular_step_deg},
+                    "angular_step_deg": scan_cfg.angular_step_deg,
+                    "elevation_min_deg": scan_cfg.elevation_min_deg,
+                    "elevation_max_deg": scan_cfg.elevation_max_deg},
         "config": config_to_dict(cfg),
     })
     doc["stations"] = station_info

@@ -65,6 +65,9 @@ class LayoutConfig:
     passage_head_m: Range = (2.0, 2.4)
     p_entrance: float = 1.0
     p_duplex: float = 0.0               # двухуровневая квартира: второй этаж, лестница, проём (duplex.py)
+    duplex_slab_m: Range = (0.2, 0.2)  # floor-to-floor separation minus lower ceiling height
+    duplex_p_turning: float = 0.0  # share of duplex attempts with a two-flight stair
+    duplex_p_upper_terrace: float = 0.0  # convert an eligible upper exterior room to open sky
     duplex_p_spiral: float = 0.3        # доля винтовых лестниц (иначе прямой марш у глухой стены)
     entrance_width_m: Range = (0.9, 1.0)
     window_width_m: Range = (0.6, 1.8)
@@ -95,6 +98,8 @@ class InteriorConfig:
     p_pilaster: float = 0.15
     p_mirror_bath: float = 0.7
     p_mirror_other: float = 0.05
+    p_leaning_board: float = 0.15  # per eligible room, scaled by mess
+    p_clutter_group: float = 0.0  # grouped wall-like movable objects in furnished rooms
     clutter_per_m2: float = 0.05
     procedural: bool = True             # мебель из частей (ножки, полки, спинки) вместо цельных коробок
     p_curtains: float = 0.6             # шторы на окне жилой комнаты
@@ -148,6 +153,9 @@ class ScannerConfig:
     stations_per_m2: float = 1.0 / 18.0
     max_stations_per_room: int = 3
     p_room_unscanned: float = 0.05      # закрытое неотсканированное помещение...
+    station_random_fraction: float = 0.0  # random rather than farthest-point stations
+    p_limited_ceiling_view: float = 0.0  # scene-level limited elevation acquisition
+    limited_elevation_max_deg: Range = (25.0, 55.0)
     unscanned_kinds: tuple[str, ...] = ("corridor",)   # ...только такого вида: комнаты, кухню, санузел снимают всегда
     min_clearance_m: float = 0.12       # тесное помещение (санузел): не меньше столько до стен и сантехники
     tilt_sigma_deg: float = 0.0         # остаточный наклон после компенсатора
@@ -249,3 +257,4 @@ def load_config(path: str | Path | None = None, overrides: dict | None = None) -
 
 def config_to_dict(cfg: SynthConfig) -> dict:
     return dataclasses.asdict(cfg)
+

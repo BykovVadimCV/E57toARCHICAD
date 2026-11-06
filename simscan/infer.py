@@ -135,6 +135,7 @@ def predict(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 128, tta=
     lg = res.pop("logits")
     e = np.exp(lg - lg.max(0))
     res["prob"] = e / e.sum(0)
+    if "aux" in res: res["aux_prob"] = 1 / (1 + np.exp(-np.clip(res.pop("aux"), -30, 30)))
     if "orient" in res:
         n = np.linalg.norm(res["orient"], axis=0, keepdims=True)
         res["orient"] = res["orient"] / np.maximum(n, 1e-6)
@@ -172,7 +173,7 @@ def _predict_single(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 1
             o = {k: v.float().cpu().numpy() for k, v in o.items()}
             for n_, (y, xx) in enumerate(chunk):
                 acc["logits"][:, y:y + tile, xx:xx + tile] += o["sem"][n_] * wt
-                for k in ("dist", "orient", "heights"):
+                for k in ("dist", "orient", "heights", "aux"):
                     if k in o:
                         acc.setdefault(k, np.zeros((o[k].shape[1], Hp, Wp), np.float32))
                         acc[k][:, y:y + tile, xx:xx + tile] += o[k][n_] * wt
@@ -183,6 +184,7 @@ def _predict_single(model, dev, x: np.ndarray, tile: int = 512, overlap: int = 1
     lg = res.pop("logits")
     e = np.exp(lg - lg.max(0))
     res["prob"] = e / e.sum(0)
+    if "aux" in res: res["aux_prob"] = 1 / (1 + np.exp(-np.clip(res.pop("aux"), -30, 30)))
     if "orient" in res:
         n = np.linalg.norm(res["orient"], axis=0, keepdims=True)
         res["orient"] = res["orient"] / np.maximum(n, 1e-6)
@@ -213,7 +215,7 @@ def infer_input(model, dev, x: np.ndarray, out_dir, scene: dict | None = None, t
     cv2.imwrite(str(d / "seen.png"), (seen_from_input(x) * 255).astype(np.uint8))   # видны пол или потолок
     cv2.imwrite(str(d / "points.png"), (points_from_input(x) * 255).astype(np.uint8))   # точки стен и предметов
     np.savez_compressed(d / "prob.npz", prob=r["prob"].astype(np.float16))
-    for k in ("dist", "orient", "heights"):
+    for k in ("dist", "orient", "heights", "aux_prob"):
         if k in r:
             np.save(d / f"{k}.npy", r[k].astype(np.float16))
         else:

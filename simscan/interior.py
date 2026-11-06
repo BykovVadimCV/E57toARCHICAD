@@ -214,6 +214,8 @@ class Furnisher:
             self._door_frames(layout)
         for room in layout.rooms:
             if room.open_sky:                               # открытый балкон - пустой (пол ниже, предметы от 0)
+                if room.id == layout.meta.get('upper_terrace_room_id'):
+                    self._terrace_furniture(layout, room, grids[room.id])
                 continue
             g = grids[room.id]
             self._wall_fixtures(layout, room, g)
@@ -228,6 +230,8 @@ class Furnisher:
                 self._curtains(layout, room)
             self._clutter(layout, room, g, 0.3 if self.bare else 1.0)
             if self.cfg.furniture and not self.bare:
+                if self.cfg.p_clutter_group > 0 and rng.random() < self.cfg.p_clutter_group:
+                    self._clutter_group(layout, room, g)
                 self._mess(layout, room, g)
                 self._scans(layout, room, g)
         if self.cfg.baseboards and not self.bare:
@@ -443,6 +447,33 @@ class Furnisher:
             self._add(layout, "box", "clutter", [box], self._refl(), room.id)
             g.mark((x - s / 2, y - s / 2, x + s / 2, y + s / 2), 0.1)
 
+    def _clutter_group(self, layout: Layout, room: Room, g: RoomGrid) -> None:
+        """A group of separated tall movable panels, labelled as clutter."""
+        pts=g.free_points(1.0)
+        if not len(pts): return
+        x,y=pts[int(self.rng.integers(len(pts)))]
+        # A shared axis yields convincing dense, wall-like returns without a
+        # single continuous wall, while a conservative reservation prevents overlap.
+        rect=(x-.75,y-.35,x+.75,y+.35)
+        if not g.is_free(rect, True): return
+        for dx in (-.5,0.,.5):
+            h=self._u((1.2,2.0))
+            box=Box((x+dx,y,h/2),(.34,.12,h),0.)
+            self._add(layout,'panel_group','clutter',[box],self._refl(),room.id)
+        g.mark(rect,.1)
+
+    def _terrace_furniture(self, layout: Layout, room: Room, g: RoomGrid) -> None:
+        pts=g.free_points(.8)
+        if not len(pts): return
+        x,y=pts[int(self.rng.integers(len(pts)))]; z=room.floor_z
+        rect=(x-.5,y-.5,x+.5,y+.5)
+        if not g.is_free(rect,False): return
+        # Table plus slender canopy support and overhead shade, all non-wall objects.
+        boxes=[Box((x,y,z+.37),(.8,.8,.06)), Box((x,y,z+.9),(.04,.04,1.8)),
+               Box((x,y,z+1.82),(1.0,1.0,.04))]
+        self._add(layout,'terrace_furniture','clutter',boxes,self._refl(),room.id)
+        g.mark(rect,.1)
+
     # --- беспорядок: мягкие и неровные вещи -----------------------------------
     def _mess(self, layout: Layout, room: Room, g: RoomGrid) -> None:
         """Куртка на коробке, плед на диване, сумки, кучи белья, стопки коробок, доски у стены.
@@ -512,7 +543,7 @@ class Furnisher:
             r = max(w, d) / 2 + 0.05
             g.mark((x - r, y - r, x + r, y + r), 0.05)
         # доски / листы, прислонённые к стене
-        if room.kind in ("room", "corridor") and rng.random() < 0.15 * m:
+        if room.kind in ("room", "corridor") and rng.random() < self.cfg.p_leaning_board * m:
             side = ("B", "T", "L", "R")[int(rng.integers(4))]
             lo, hi = _side_len(room.clear, side)
             if hi - lo > 1.6:
@@ -866,3 +897,4 @@ def _subtract_intervals(span, gaps):
     if cur < b:
         out.append((cur, b))
     return out
+

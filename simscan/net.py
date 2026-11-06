@@ -54,7 +54,7 @@ class _Up(nn.Module):
 
 
 class PlanNet(nn.Module):
-    def __init__(self, in_channels: int = 8, n_classes: int = N_CLASSES, width: int = 64):
+    def __init__(self, in_channels: int = 8, n_classes: int = N_CLASSES, width: int = 64, aux_channels: int = 0):
         super().__init__()
         w = width
         self.stem = nn.Sequential(nn.Conv2d(in_channels, w, 7, 2, 3, bias=False), nn.BatchNorm2d(w),
@@ -70,6 +70,7 @@ class PlanNet(nn.Module):
         self.u1 = _Up(w, w, w // 2)
         self.u0 = _Up(w // 2, in_channels, w // 2)                                            # полный размер
         self.sem = nn.Conv2d(w // 2, n_classes, 1)
+        self.aux = nn.Conv2d(w // 2, aux_channels, 1) if aux_channels else None
         self.reg = nn.Conv2d(w // 2, 5, 1)                                                    # dist, orient×2, heights×2
 
     def forward(self, x):
@@ -90,10 +91,12 @@ class PlanNet(nn.Module):
         y = self.u0(y, s0)
         y = y[..., :H, :W]
         r = self.reg(y)
-        return {"sem": self.sem(y),
+        out = {"sem": self.sem(y),
                 "dist": torch.sigmoid(r[:, :1]),
                 "orient": F.normalize(r[:, 1:3], dim=1, eps=1e-6),
                 "heights": torch.sigmoid(r[:, 3:5])}
+        if self.aux is not None: out["aux"] = self.aux(y)
+        return out
 
 
 # ----------------------------------------------------------------------
@@ -139,7 +142,9 @@ def losses(out: dict, batch: dict, class_weights=None, w: dict | None = None, us
     valid = sem != 255
 
     # Focal loss вместо обычного CE для борьбы с дисбалансом классов
-    if use_focal:
+    if not valid.any():
+        ce = out["sem"].sum() * 0
+    elif use_focal:
         ce = focal_loss(out["sem"], sem, alpha=class_weights, gamma=2.0, ignore_index=255)
     else:
         ce = F.cross_entropy(out["sem"], sem, weight=class_weights, ignore_index=255)
@@ -151,7 +156,7 @@ def losses(out: dict, batch: dict, class_weights=None, w: dict | None = None, us
     inter = (p * onehot).sum((0, 2, 3))
     den = p.sum((0, 2, 3)) + onehot.sum((0, 2, 3))
     present = onehot.sum((0, 2, 3)) > 0
-    dice = 1 - ((2 * inter + 1) / (den + 1))[present].mean()
+    dice = (1 - ((2 * inter + 1) / (den + 1))[present].mean()) if present.any() else prob.sum() * 0
     # clDice по объединению «стена + проёмы»: связность контура важнее толщины
     pw = prob[:, list(WALLISH)].sum(1, keepdim=True) * vm
     tw = onehot[:, list(WALLISH)].sum(1, keepdim=True)
@@ -167,6 +172,16 @@ def losses(out: dict, batch: dict, class_weights=None, w: dict | None = None, us
     heights = (F.l1_loss(out["heights"], batch["heights"], reduction="none") * mh).sum() / (2 * mh.sum()).clamp(min=1)
     parts = {"ce": ce, "dice": dice, "cldice": cldice, "dist": dist, "orient": orient, "heights": heights}
     parts["total"] = sum(w[k] * v for k, v in parts.items())
+    if "aux" in out:
+        valid_aux = batch["aux_valid"].bool() & valid.unsqueeze(1)
+        truth = batch["aux"].float()
+        positive = (truth * valid_aux).sum((0, 2, 3))
+        negative = ((1 - truth) * valid_aux).sum((0, 2, 3))
+        pos_weight = torch.where(positive > 0, (negative / positive.clamp(min=1)).clamp(1, 20), torch.ones_like(positive))
+        per_pixel = F.binary_cross_entropy_with_logits(out["aux"], truth, reduction="none", pos_weight=pos_weight[None,:,None,None])
+        aux_loss = (per_pixel * valid_aux).sum() / valid_aux.sum().clamp(min=1)
+        parts["aux"] = aux_loss
+        parts["total"] = parts["total"] + 0.5 * aux_loss
     return parts
 
 
@@ -182,3 +197,4 @@ def iou_from_confusion(cm) -> list[float]:
     tp = cm.diag()
     den = cm.sum(0) + cm.sum(1) - tp
     return [float(t / d) if d > 0 else float("nan") for t, d in zip(tp, den)]
+
