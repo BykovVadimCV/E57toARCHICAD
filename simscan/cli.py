@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> None:
     md.add_argument("--variants", type=int, default=1,
                     help="растров на скан: 2-3 - дешёвая аугментация (поворот облака, прореживание)")
     md.add_argument("--hd-masks", action="store_true", help="export native high-resolution wall, edge and opening masks")
-    md.add_argument("--hd-pixel-mm", type=float, default=5.0, help="HD mask metric pitch (default: 5 mm)")
+    md.add_argument("--hd-pixel-mm", type=float, default=2.0, help="HD mask metric pitch (default: 2 mm)")
     md.add_argument("--hd-min-size", default="2048x1152", help="minimum HD dimensions WIDTHxHEIGHT; no stretching")
     md.add_argument("--config")
     md.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
