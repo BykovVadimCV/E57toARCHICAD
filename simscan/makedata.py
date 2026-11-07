@@ -31,11 +31,18 @@ def _vid(k: int) -> str:
     return "" if k == 0 else f"_v{k}"
 
 
-def _done(root: Path, scene_id: str, variants: int = 1) -> bool:
+def _done(root: Path, scene_id: str, variants: int = 1, hd_masks: bool = False,
+          hd_pixel_mm: float = 5.0, hd_min_size: tuple[int, int] = (2048, 1152)) -> bool:
     from .dataset_contract import complete_level
     try:
         manifest=json.loads((root/'completed'/(scene_id+'.json')).read_text(encoding='utf-8'))
-        return manifest['variants']==variants and all(complete_level(root/'scenes'/d) for d in manifest['levels'])
+        if manifest['variants'] != variants:
+            return False
+        if hd_masks:
+            from .hdmask import complete_hd_level
+        return all(complete_level(root/'scenes'/d) and
+                   (not hd_masks or complete_hd_level(root/'scenes'/d, hd_pixel_mm, hd_min_size))
+                   for d in manifest['levels'])
     except (OSError,ValueError,KeyError):return False
 
 
@@ -50,7 +57,7 @@ def _aug(seed: int, index: int, k: int, p_thin: float, p_shift: float) -> dict:
 
 
 def _one(args) -> dict:
-    cfg, root, work, seed, index, keep_scan, p_thin, p_shift, variants, unseen_policy = args
+    cfg, root, work, seed, index, keep_scan, p_thin, p_shift, variants, unseen_policy, hd_masks, hd_pixel_mm, hd_min_size = args
     from .generate import generate_scene
     from .netinput import E57Source, MemorySource, build_scene
 
@@ -74,6 +81,10 @@ def _one(args) -> dict:
                                     log=lambda *a, **kw: None, unseen_policy=unseen_policy, preview=False, **_aug(seed, index, k, p_thin, p_shift))
         finally:
             src.close()
+        if hd_masks:
+            from .hdmask import write_hd_level
+            for level_dir in dirs:
+                write_hd_level(tmp, level_dir, hd_pixel_mm, hd_min_size)
         from .dataset_contract import atomic_json
         relative=[Path(d).relative_to(Path(root)/'scenes').as_posix() for d in dirs]
         if not dirs:raise ValueError('No valid dataset levels')
@@ -113,17 +124,25 @@ def rebuild_splits(root) -> dict:
 
 def make_dataset(cfg: SynthConfig, out_root, count: int, seed: int = 0, start: int = 0, workers: int = 1,
                  work_dir=None, keep_scans: bool = False, p_thin: float = 0.3, p_shift: float = 0.5,
-                 variants: int = 1, log=print, unseen_policy: str = "ignore") -> dict:
+                 variants: int = 1, log=print, unseen_policy: str = "ignore",
+                 hd_masks: bool = False, hd_pixel_mm: float = 5.0,\n                 hd_min_size: tuple[int, int] = (2048, 1152)) -> dict:
     """variants - растров на один скан: первый как есть, остальные с поворотом облака на
     случайный угол и прореживанием (растр стоит ~5-10 с против ~45 с симуляции скана)."""
     from .netinput import write_meta
 
     cfg=copy.deepcopy(cfg)
     if count<0 or variants<1 or workers<1:raise ValueError('Invalid count, variants or workers')
+    if hd_masks:
+        from .hdmask import make_hd_frame, parse_size
+        hd_min_size = parse_size(hd_min_size)
+        if not np.isfinite(hd_pixel_mm) or not 0.5 <= hd_pixel_mm <= 100:
+            raise ValueError('HD pixel size must be between 0.5 and 100 mm')
     root = Path(out_root)
     from .dataset_contract import fingerprint,atomic_json
     build={'fingerprint':fingerprint(cfg),'config':config_to_dict(cfg),'seed':seed,'variants':variants,
-           'p_thin':p_thin,'p_shift':p_shift,'unseen_policy':unseen_policy}
+           'p_thin':p_thin,'p_shift':p_shift,'unseen_policy':unseen_policy,
+           'hd_masks':hd_masks,'hd_pixel_mm':hd_pixel_mm if hd_masks else None,
+           'hd_min_size':hd_min_size if hd_masks else None}
     build=json.loads(json.dumps(build,sort_keys=True))
     marker=root/'build_contract.json'
     if marker.exists():
@@ -139,9 +158,9 @@ def make_dataset(cfg: SynthConfig, out_root, count: int, seed: int = 0, start: i
     cfg.export.write_mesh = False
     work = Path(work_dir) if work_dir else root / "_work"
     work.mkdir(parents=True, exist_ok=True)
-    todo = [i for i in range(start, start + count) if not _done(root, f"scene_{i:05d}", variants)]
+    todo = [i for i in range(start, start + count) if not _done(root, f"scene_{i:05d}", variants, hd_masks, hd_pixel_mm, hd_min_size)]
     log(f"сцен {count}, готово {count - len(todo)}, осталось {len(todo)}")
-    jobs = [(cfg, str(root), str(work), seed, i, keep_scans, p_thin, p_shift, variants, unseen_policy) for i in todo]
+    jobs = [(cfg, str(root), str(work), seed, i, keep_scans, p_thin, p_shift, variants, unseen_policy, hd_masks, hd_pixel_mm, hd_min_size) for i in todo]
     ok = err = 0
     t0 = time.time()
     with open(root / "make_log.jsonl", "a", encoding="utf-8") as flog:
