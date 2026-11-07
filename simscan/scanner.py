@@ -105,14 +105,27 @@ def _station_spots(g, cfg: ScannerConfig) -> np.ndarray:
 def place_stations(layout: Layout, grids: dict, cfg: ScannerConfig,
                    rng: np.random.Generator) -> list[Station]:
     stations: list[Station] = []
+    if cfg.max_stations_per_room < 1:
+        raise ValueError("max_stations_per_room must be >= 1")
     for room in layout.rooms:
-        if len(layout.rooms) > 1 and room.kind in cfg.unscanned_kinds and rng.random() < cfg.p_room_unscanned:
+        # Complete-apartment acquisition overrides the deliberate missing-room
+        # augmentation. A closed door is not a reason to omit the room beyond it:
+        # a scanner station is placed inside that room as in a real multi-setup scan.
+        if (not cfg.require_all_rooms_scanned and len(layout.rooms) > 1
+                and room.kind in cfg.unscanned_kinds
+                and rng.random() < cfg.p_room_unscanned):
             room.scanned = False
             continue
         pts = _station_spots(grids[room.id], cfg)
         if len(pts) == 0:
             room.scanned = False
+            if cfg.require_all_rooms_scanned:
+                raise RuntimeError(
+                    f"Cannot scan entire apartment: no safe scanner position in "
+                    f"room {room.id} ({room.kind}, {room.area:.2f} m2)"
+                )
             continue
+        room.scanned = True
         n = int(np.clip(round(room.area * cfg.stations_per_m2 + rng.uniform(-0.5, 0.5)),
                         1, cfg.max_stations_per_room))
         chosen = [pts[int(rng.integers(len(pts)))]]
