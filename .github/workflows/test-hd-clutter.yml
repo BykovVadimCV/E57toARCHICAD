@@ -25,11 +25,13 @@ jobs:
       - name: Install minimal unit-test dependencies
         run: python -m pip install -U pip pytest numpy scipy opencv-python-headless pyyaml pillow shapely
       - name: Run native HD mask and clutter tests
-        run: python -m pytest -q tests/test_hdmask.py tests/test_clutter_models.py tests/test_scan_visual_style.py
+        run: python -m pytest -q tests/test_hdmask.py tests/test_clutter_models.py tests/test_scan_visual_style.py tests/test_full_scan_and_doors.py
       - name: Install Open3D system graphics libraries
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libgomp1 libxrender1 libxext6
       - name: Install 3D raycasting dependency
         run: python -m pip install 'open3d>=0.18' 'pye57>=0.4.10'
+      - name: Verify closed door raycasting with Open3D
+        run: python -m pytest -q tests/test_full_scan_and_doors.py
       - name: Simulate one complete 2 mm training scene
         run: |
           python -m simscan make-dataset \
@@ -64,6 +66,17 @@ jobs:
               assert ((wall == 0) | (wall == 255)).all(), 'Wall mask not binary'
               assert ((openings == 0) | (wall == 0)).all(), 'Walls and openings overlap'
               print('VERIFIED', d, wall.shape, frame['pixel_m'])
+          layout = json.loads((p / '_work/scene_00000/layout.json').read_text())
+          coverage = layout['meta']['coverage']
+          assert coverage['required'] is True
+          assert coverage['total_rooms'] == coverage['verified_rooms'] == len(layout['rooms'])
+          assert all(room['station_count'] > 0 and room['architectural_returns'] >= 30
+                     for room in coverage['rooms'])
+          interior_doors = [o for o in layout['openings']
+                            if o['kind'] == 'door' and len(o['rooms']) >= 2]
+          assert sum(o['angle_deg'] == 0.0 for o in interior_doors) >= min(1, len(interior_doors))
+          print('FULL ROOM COVERAGE', coverage['verified_rooms'], 'of', coverage['total_rooms'])
+          print('CLOSED INTERIOR DOORS', sum(o['angle_deg'] == 0.0 for o in interior_doors))
           print('End-to-end smoke test PASS: ', len(levels), 'level(s)')
           PY
       - name: Project the actual simulated E57 point cloud at 2 mm
