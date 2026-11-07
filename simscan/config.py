@@ -101,6 +101,7 @@ class InteriorConfig:
     p_leaning_board: float = 0.15  # per eligible room, scaled by mess
     p_clutter_group: float = 0.0  # grouped wall-like movable objects in furnished rooms
     clutter_per_m2: float = 0.05
+    p_detailed_clutter: float = 0.75  # fraction of floor clutter replaced with multipart raycastable props
     procedural: bool = True             # мебель из частей (ножки, полки, спинки) вместо цельных коробок
     p_curtains: float = 0.6             # шторы на окне жилой комнаты
     p_tulle: float = 0.5                # тюль (пропускает часть лучей)
