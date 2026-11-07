@@ -87,3 +87,46 @@ common clutter categories when those names appear in its manifest.
 The new HD masks are not neural-network inputs. Training a model with
 actual 2 mm point-cloud tensors requires a separate multiresolution input
 and model-training change.
+
+## Complete-apartment acquisition and closed doors
+
+New synthetic scenes require every room on **every level** to have a scanner
+station. The scanner validates actual raycast evidence per room before accepting
+a scene: by default at least 100 valid returns and 30 wall/column/door/window
+returns aggregated from that room's station(s). The expected totals and measured
+returns are saved under `layout.json -> meta.coverage.rooms`. A room with
+no safe scanner position or insufficient raycast returns causes a hard
+generation failure, **never an invisible missing room**.
+
+The generator makes up to four deterministic attempts using distinct random
+seeds for a scene in complete-coverage mode; failed partial scenes are cleaned
+up. If none passes, the scene is reported as failed rather than being accepted
+with missing coverage. Configure via:
+
+```yaml
+scanner:
+  require_all_rooms_scanned: true
+  complete_scene_attempts: 4
+  min_valid_returns_per_room: 100
+  min_architectural_returns_per_room: 30
+  p_room_unscanned: 0.0
+
+interior:
+  p_closed_door: 0.45
+  min_closed_interior_doors: 1
+```
+
+Any level containing interior doors will have at least one with
+`angle_deg: 0.0`. The leaf remains a real 3D surface and occludes simulated
+laser rays. Each room has its own station even if its doorway is closed,
+like a multi-position TLS acquisition where the operator visits every room.
+The wall mask continues to identify the underlying architectural opening,
+while the scanner observes a solid closed door leaf.
+
+This is a **per-room station and return requirement**, not a guarantee that
+100% of every wall surface has line-of-sight coverage. Furniture, closed doors
+and scan shadows remain deliberately visible in the simulated point cloud.
+
+Opt out for deliberate incomplete-scan augmentation by setting
+`scanner.require_all_rooms_scanned=false`, which restores the older
+`p_room_unscanned` behavior and disables the strict acceptance check.
