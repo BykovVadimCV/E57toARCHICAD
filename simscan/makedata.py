@@ -60,43 +60,69 @@ def _one(args) -> dict:
     cfg, root, work, seed, index, keep_scan, p_thin, p_shift, variants, unseen_policy, hd_masks, hd_pixel_mm, hd_min_size = args
     from .generate import generate_scene
     from .netinput import E57Source, MemorySource, build_scene
+    from .dataset_contract import atomic_json
 
     scene_id = f"scene_{index:05d}"
     tmp = Path(work) / scene_id
+    root = Path(root)
     t0 = time.time()
-    try:
-        (Path(root)/"completed"/(scene_id+".json")).unlink(missing_ok=True)
+    attempts = (int(cfg.scanner.complete_scene_attempts)
+                if cfg.scanner.require_all_rooms_scanned else 1)
+    if attempts < 1:
+        return {"scene": scene_id, "error": "complete_scene_attempts must be >= 1", "s": 0}
+    errors = []
+    (root / "completed" / (scene_id + ".json")).unlink(missing_ok=True)
+    for attempt in range(attempts):
+        # A failed level check may have written partial scene files already.
+        # Discard everything from this scene before trying another stable seed.
         shutil.rmtree(tmp, ignore_errors=True)
-        # скан не пишется на диск (~0,5-1 ГБ записи и чтения на сцену): растр - из памяти,
-        # теми же точками, что легли бы в scan.e57; --keep-scans - по-старому, через файл
-        r = generate_scene(cfg, tmp, seed, index, write_scan=keep_scan, training_only=True)
-        if isinstance(r, dict) and r.get("error"):
-            raise RuntimeError(r["error"])
-        t_gen = time.time() - t0
-        src = E57Source(tmp / "scan.e57") if keep_scan else MemorySource(*r.pop("_scans"))
-        dirs = []
+        for k in range(variants):
+            shutil.rmtree(root / "scenes" / (scene_id + _vid(k)), ignore_errors=True)
+        # Distinct deterministic layout and scanner RNG per attempt; the index
+        # remains stable, so resuming the dataset repeats the same outcomes.
+        effective_seed = seed + 1_000_003 * attempt
         try:
-            for k in range(variants):
-                dirs += build_scene(tmp, root, splits=False, source=src, variant=_vid(k),
-                                    log=lambda *a, **kw: None, unseen_policy=unseen_policy, preview=False, **_aug(seed, index, k, p_thin, p_shift))
+            r = generate_scene(cfg, tmp, effective_seed, index, write_scan=keep_scan,
+                               training_only=True)
+            if isinstance(r, dict) and r.get("error"):
+                raise RuntimeError(r["error"])
+            t_gen = time.time() - t0
+            src = E57Source(tmp / "scan.e57") if keep_scan else MemorySource(*r.pop("_scans"))
+            dirs = []
+            try:
+                for k in range(variants):
+                    dirs += build_scene(
+                        tmp, root, splits=False, source=src, variant=_vid(k),
+                        log=lambda *a, **kw: None, unseen_policy=unseen_policy,
+                        preview=False,
+                        **_aug(effective_seed, index, k, p_thin, p_shift))
+            finally:
+                src.close()
+            if not dirs:
+                raise ValueError("No valid dataset levels")
+            if hd_masks:
+                from .hdmask import write_hd_level
+                for level_dir in dirs:
+                    write_hd_level(tmp, level_dir, hd_pixel_mm, hd_min_size)
+            relative = [Path(d).relative_to(root / "scenes").as_posix() for d in dirs]
+            atomic_json(root / "completed" / (scene_id + ".json"),
+                        {"variants": variants, "levels": relative,
+                         "attempt": attempt, "generation_seed": effective_seed})
+            return {"scene": scene_id, "levels": relative,
+                    "attempt": attempt, "generation_seed": effective_seed,
+                    "s": round(time.time() - t0, 1), "s_gen": round(t_gen, 1),
+                    "s_raster_export": round(time.time() - t0 - t_gen, 3),
+                    "timings": r.get("timings", {})}
+        except Exception as exc:
+            errors.append(f"attempt {attempt + 1}/{attempts}: {type(exc).__name__}: {exc}")
         finally:
-            src.close()
-        if hd_masks:
-            from .hdmask import write_hd_level
-            for level_dir in dirs:
-                write_hd_level(tmp, level_dir, hd_pixel_mm, hd_min_size)
-        from .dataset_contract import atomic_json
-        relative=[Path(d).relative_to(Path(root)/'scenes').as_posix() for d in dirs]
-        if not dirs:raise ValueError('No valid dataset levels')
-        atomic_json(Path(root)/'completed'/(scene_id+'.json'),{'variants':variants,'levels':relative})
-        return {"scene": scene_id, "levels": [str(Path(d).relative_to(Path(root) / "scenes")) for d in dirs],
-                "s": round(time.time() - t0, 1), "s_gen": round(t_gen, 1),
-                "s_raster_export":round(time.time()-t0-t_gen,3),"timings":r.get("timings",{})}
-    except Exception as exc:  # одна плохая сцена не роняет набор
-        return {"scene": scene_id, "error": f"{type(exc).__name__}: {exc}", "s": round(time.time() - t0, 1)}
-    finally:
-        if not keep_scan:
-            shutil.rmtree(tmp, ignore_errors=True)
+            if not keep_scan:
+                shutil.rmtree(tmp, ignore_errors=True)
+    shutil.rmtree(tmp, ignore_errors=True)
+    for k in range(variants):
+        shutil.rmtree(root / "scenes" / (scene_id + _vid(k)), ignore_errors=True)
+    return {"scene": scene_id, "error": "; ".join(errors[-2:]),
+            "attempts": attempts, "s": round(time.time() - t0, 1)}
 
 
 def rebuild_splits(root) -> dict:
