@@ -36,11 +36,11 @@ jobs:
             --config configs/customer_like.yaml \
             --set layout.source=simscan \
             --set layout.p_duplex=0 \
-            --set scanner.angular_step_deg=3.0 \
+            --set scanner.angular_step_deg=0.5 \
             --set interior.p_bare=0.0 \
             --set interior.clutter_per_m2=0.3 \
             --set interior.p_detailed_clutter=1.0 \
-            --count 1 --workers 1 --variants 1 \
+            --count 1 --workers 1 --variants 1 --keep-scans \
             --hd-masks --hd-pixel-mm 2 --out /tmp/simscan_hd_smoke
           python - <<'PY'
           import json
@@ -66,6 +66,12 @@ jobs:
               print('VERIFIED', d, wall.shape, frame['pixel_m'])
           print('End-to-end smoke test PASS: ', len(levels), 'level(s)')
           PY
+      - name: Project the actual simulated E57 point cloud at 2 mm
+        run: |
+          PYTHONPATH=. python tools/preview_scan_hd.py \
+            --scene-dir /tmp/simscan_hd_smoke/_work/scene_00000 \
+            --level-dir /tmp/simscan_hd_smoke/scenes/scene_00000/L1 \
+            --preview-width 1800
       - name: Prepare one mask preview from actual 2 mm output
         if: always()
         run: |
@@ -90,9 +96,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-2mm-wall-mask
+          name: native-2mm-scan-and-mask
           path: |
             /tmp/hd_wall_preview.png
+            /tmp/simscan_hd_smoke/scenes/*/L*/scan_topdown_2mm.png
+            /tmp/simscan_hd_smoke/scenes/*/L*/scan_topdown_preview.png
+            /tmp/simscan_hd_smoke/scenes/*/L*/scan_topdown_meta.json
             /tmp/simscan_hd_smoke/scenes/*/L*/wall_mask_hd.png
             /tmp/simscan_hd_smoke/scenes/*/L*/openings_hd.png
           if-no-files-found: warn
