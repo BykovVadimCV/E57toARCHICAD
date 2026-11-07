@@ -243,13 +243,38 @@ class Furnisher:
         return grids
 
     def _set_doors(self, layout: Layout) -> None:
+        """Choose real closed/open door leaves, guaranteeing interior closures.
+
+        Zero degrees is a physical *closed door box* in SceneBuilder, not an
+        omitted opening or a painted mask. We keep the room accessible to a
+        scanner station independently of whether the door is shut.
+        """
+        if not 0 <= self.cfg.p_closed_door <= 1:
+            raise ValueError("p_closed_door must lie in [0, 1]")
+        if self.cfg.min_closed_interior_doors < 0:
+            raise ValueError("min_closed_interior_doors cannot be negative")
+        interior = []
         for o in layout.openings:
             if o.kind != "door":
                 continue
-            if self.rng.random() < self.cfg.p_closed_door:
-                o.angle_deg = 0.0
-            else:
-                o.angle_deg = round(self._u(self.cfg.door_open_deg), 1)
+            if o.hinge not in (-1, 1):
+                o.hinge = int(self.rng.choice((-1, 1)))
+            if o.swing not in (-1, 1):
+                o.swing = int(self.rng.choice((-1, 1)))
+            o.angle_deg = (0.0 if self.rng.random() < self.cfg.p_closed_door
+                           else round(self._u(self.cfg.door_open_deg), 1))
+            if len(o.rooms) >= 2:
+                interior.append(o)
+        missing = min(len(interior), self.cfg.min_closed_interior_doors) - sum(
+            o.angle_deg == 0.0 for o in interior)
+        if missing > 0:
+            opened = [o for o in interior if o.angle_deg != 0.0]
+            selected = self.rng.choice(len(opened), size=missing, replace=False)
+            for ix in np.atleast_1d(selected):
+                opened[int(ix)].angle_deg = 0.0
+        layout.meta["closed_doors"] = sum(
+            o.kind == "door" and o.angle_deg == 0.0 for o in layout.openings)
+        layout.meta["closed_interior_doors"] = sum(o.angle_deg == 0.0 for o in interior)
 
     def _reserve_openings(self, layout: Layout, grids) -> None:
         for o in layout.openings:
@@ -442,10 +467,22 @@ class Furnisher:
             if len(pts) == 0:
                 return
             x, y = pts[int(self.rng.integers(len(pts)))]
-            h = self._u((0.2, 0.7))
-            box = Box((x, y, h / 2), (s, self._u((0.25, 0.6)), h), float(self.rng.uniform(0, math.pi)))
-            self._add(layout, "box", "clutter", [box], self._refl(), room.id)
-            g.mark((x - s / 2, y - s / 2, x + s / 2, y + s / 2), 0.1)
+            if self.cfg.procedural and self.rng.random() < self.cfg.p_detailed_clutter:
+                from .clutter import KINDS, make
+                kind = KINDS[int(self.rng.integers(len(KINDS)))]
+                boxes, prims, radius = make(kind, float(x), float(y), s,
+                                            self.rng, float(self.rng.uniform(0, math.pi)))
+                # Reserve the full silhouette, including projecting handles and rods.
+                rect = (x-radius, y-radius, x+radius, y+radius)
+                if not g.is_free(rect, True):
+                    continue
+                self._add(layout, kind, "clutter", boxes, self._refl(), room.id, prims)
+                g.mark(rect, 0.05)
+            else:
+                h = self._u((0.2, 0.7))
+                box = Box((x, y, h / 2), (s, self._u((0.25, 0.6)), h), float(self.rng.uniform(0, math.pi)))
+                self._add(layout, "box", "clutter", [box], self._refl(), room.id)
+                g.mark((x - s / 2, y - s / 2, x + s / 2, y + s / 2), 0.1)
 
     def _clutter_group(self, layout: Layout, room: Room, g: RoomGrid) -> None:
         """A group of separated tall movable panels, labelled as clutter."""

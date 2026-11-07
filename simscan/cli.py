@@ -78,6 +78,9 @@ def main(argv: list[str] | None = None) -> None:
     md.add_argument("--keep-scans", action="store_true", help="писать scan.e57 и не удалять сцены (медленнее)")
     md.add_argument("--variants", type=int, default=1,
                     help="растров на скан: 2-3 - дешёвая аугментация (поворот облака, прореживание)")
+    md.add_argument("--hd-masks", action="store_true", help="export native high-resolution wall, edge and opening masks")
+    md.add_argument("--hd-pixel-mm", type=float, default=2.0, help="HD mask metric pitch (default: 2 mm)")
+    md.add_argument("--hd-min-size", default="2048x1152", help="minimum HD dimensions WIDTHxHEIGHT; no stretching")
     md.add_argument("--config")
     md.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     tr = sub.add_parser("train", help="обучить сеть плана на датасете (нужен torch)")
@@ -294,7 +297,8 @@ def main(argv: list[str] | None = None) -> None:
 
         cfg = load_config(args.config, _parse_set(args.set))
         make_dataset(cfg, args.out, args.count, args.seed, args.start, args.workers, work_dir=args.work_dir,
-                     keep_scans=args.keep_scans, variants=args.variants, unseen_policy=args.unseen_policy)
+                     keep_scans=args.keep_scans, variants=args.variants, unseen_policy=args.unseen_policy,
+                      hd_masks=args.hd_masks, hd_pixel_mm=args.hd_pixel_mm, hd_min_size=args.hd_min_size)
         return
     if args.cmd == "dataset":
         from .makedata import pack, rebuild_splits

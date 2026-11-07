@@ -25,7 +25,9 @@ from .config import SynthConfig, config_to_dict
 from .e57io import write_e57, write_merged_e57
 from .groundtruth import (UNET_VALUES, build_masks, describe, frame_for, save_gt, unet_frame,
                           unet_mask)
+from .coverage import verify_room_scans
 from .interior import Furnisher
+from .labels import LABEL_ID
 from .layout import Box, LayoutGenerator
 from .preview import render_preview
 from .scanner import ScanSimulator, people_for_station, place_stations, sample_effect_params
@@ -162,8 +164,14 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
             t_w = t_true + rng.normal(0, params["registration_sigma_m"], 3)
         scans.append(scan)
         poses.append((R_w, t_w))
+        # Measure real architectural ray returns for each scanner position.
+        # Closed door leaves contribute door-class hits; this is not a GT estimate.
+        structural_hit = scan.valid & (
+            (scan.label == LABEL_ID["wall"]) | (scan.label == LABEL_ID["column"])
+            | (scan.label == LABEL_ID["door"]) | (scan.label == LABEL_ID["window"]))
         station_info.append({
             "id": st.id, "room_id": st.room_id % 1000, "level": level_of[k],
+            "architectural_valid": int(np.count_nonzero(structural_hit)),
             "position_layout_m": list(st.position),
             "heading_deg": st.heading_deg, "tilt_deg": list(st.tilt_deg),
             "pose_true": {"R": R_true.tolist(), "t": t_true.tolist()},
@@ -172,6 +180,7 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
             "mixed": int(scan.mixed.sum()), "virtual": int(scan.virtual.sum()),
         })
 
+    coverage = verify_room_scans(floors, station_info, cfg.scanner)
     t_scanned=time.perf_counter()
     names = [f"Station_{s.id + 1:03d}" for s in stations]
     masks_written = write_e57(out / "scan.e57", scans, poses, names, cfg.effects.keep_invalid) \
@@ -217,7 +226,7 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
                     "angular_step_deg": scan_cfg.angular_step_deg,
                     "elevation_min_deg": scan_cfg.elevation_min_deg,
                     "elevation_max_deg": scan_cfg.elevation_max_deg},
-        "config": config_to_dict(cfg),
+        "config": config_to_dict(cfg), "coverage": coverage,
     })
     doc["stations"] = station_info
     if duplex:                                           # уровни: нижний - сам doc, верхний - отдельно
@@ -230,7 +239,11 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
         mesh.save_ply(out / "mesh.ply")
     summary = {"dir": str(out), "levels": 2 if duplex else 1, "rooms": len(layout.rooms), "stations": len(stations),
                "openings": len(layout.openings), "items": len(layout.items),
-               "points_valid": int(sum(s.n_valid for s in scans))}
+               "points_valid": int(sum(s.n_valid for s in scans)),
+               "rooms_verified": coverage["verified_rooms"],
+               "rooms_total": coverage["total_rooms"],
+               "closed_doors": sum(l.meta.get("closed_doors", 0) for l in floors),
+               "closed_interior_doors": sum(l.meta.get("closed_interior_doors", 0) for l in floors)}
     if ex.preview and write_scan and not training_only:
         summary.update(render_preview(out / "scan.e57", masks, frame, world, out / "preview.png"))
     if ex.free_space_input and ex.unet_mask and write_scan and not training_only:

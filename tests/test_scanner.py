@@ -106,7 +106,8 @@ def test_every_room_but_corridor_gets_a_station():
     from simscan.generate import make_layout, scene_rng
 
     cfg = load_config(Path(__file__).parents[1] / "configs" / "customer_like.yaml",
-                      overrides={"scanner": {"p_room_unscanned": 1.0}})
+                      overrides={"scanner": {"p_room_unscanned": 1.0,
+                                              "require_all_rooms_scanned": False}})
     rooms = baths = 0
     for i in range(12):
         rng = scene_rng(3, i)

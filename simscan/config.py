@@ -89,6 +89,7 @@ class InteriorConfig:
     p_dark_furniture: float = 0.2       # отражательная способность 0,03-0,1
     p_wardrobe_to_ceiling: float = 0.3
     p_closed_door: float = 0.2
+    min_closed_interior_doors: int = 1  # at least one physically shut interior leaf when possible
     door_open_deg: Range = (20.0, 110.0)
     radiators: bool = True
     baseboards: bool = True
@@ -101,6 +102,7 @@ class InteriorConfig:
     p_leaning_board: float = 0.15  # per eligible room, scaled by mess
     p_clutter_group: float = 0.0  # grouped wall-like movable objects in furnished rooms
     clutter_per_m2: float = 0.05
+    p_detailed_clutter: float = 0.75  # fraction of floor clutter replaced with multipart raycastable props
     procedural: bool = True             # мебель из частей (ножки, полки, спинки) вместо цельных коробок
     p_curtains: float = 0.6             # шторы на окне жилой комнаты
     p_tulle: float = 0.5                # тюль (пропускает часть лучей)
@@ -152,6 +154,10 @@ class ScannerConfig:
     wall_clearance_m: float = 0.5
     stations_per_m2: float = 1.0 / 18.0
     max_stations_per_room: int = 3
+    require_all_rooms_scanned: bool = True  # no missing rooms, including corridors/balconies
+    min_valid_returns_per_room: int = 100
+    min_architectural_returns_per_room: int = 30  # wall/column/door/window raycast hits
+    complete_scene_attempts: int = 4     # retry rejected incomplete/invalid scenes deterministically
     p_room_unscanned: float = 0.05      # закрытое неотсканированное помещение...
     station_random_fraction: float = 0.0  # random rather than farthest-point stations
     p_limited_ceiling_view: float = 0.0  # scene-level limited elevation acquisition

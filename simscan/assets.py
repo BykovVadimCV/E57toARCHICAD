@@ -47,6 +47,13 @@ GSO_ROLES = {
     "Headphones": "tabletop",
     "Camera": "tabletop",
     "Hat": "tabletop",
+    "Book": "tabletop",
+    "Books": "tabletop",
+    "Bottle": "tabletop",
+    "Bags": "floor",
+    "Shoes": "shoes",
+    "Tool": "floor",
+    "Tools": "floor",
 }
 
 # Poly Haven: категории моделей -> вид предмета в asset_dir
