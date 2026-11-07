@@ -157,6 +157,7 @@ class ScannerConfig:
     require_all_rooms_scanned: bool = True  # no missing rooms, including corridors/balconies
     min_valid_returns_per_room: int = 100
     min_architectural_returns_per_room: int = 30  # wall/column/door/window raycast hits
+    complete_scene_attempts: int = 4     # retry rejected incomplete/invalid scenes deterministically
     p_room_unscanned: float = 0.05      # закрытое неотсканированное помещение...
     station_random_fraction: float = 0.0  # random rather than farthest-point stations
     p_limited_ceiling_view: float = 0.0  # scene-level limited elevation acquisition
