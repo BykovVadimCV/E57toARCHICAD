@@ -25,7 +25,7 @@ jobs:
       - name: Install minimal unit-test dependencies
         run: python -m pip install -U pip pytest numpy scipy opencv-python-headless pyyaml pillow shapely
       - name: Run native HD mask and clutter tests
-        run: python -m pytest -q tests/test_hdmask.py tests/test_clutter_models.py
+        run: python -m pytest -q tests/test_hdmask.py tests/test_clutter_models.py tests/test_scan_visual_style.py
       - name: Install Open3D system graphics libraries
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libgomp1 libxrender1 libxext6
       - name: Install 3D raycasting dependency
@@ -102,6 +102,8 @@ jobs:
             /tmp/simscan_hd_smoke/scenes/*/L*/scan_topdown_2mm.png
             /tmp/simscan_hd_smoke/scenes/*/L*/scan_topdown_preview.png
             /tmp/simscan_hd_smoke/scenes/*/L*/scan_topdown_meta.json
+            /tmp/simscan_hd_smoke/scenes/*/L*/scan_extractor_4k.png
+            /tmp/simscan_hd_smoke/scenes/*/L*/scan_extractor_4k.json
             /tmp/simscan_hd_smoke/scenes/*/L*/wall_mask_hd.png
             /tmp/simscan_hd_smoke/scenes/*/L*/openings_hd.png
           if-no-files-found: warn
