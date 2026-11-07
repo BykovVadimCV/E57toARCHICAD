@@ -20,6 +20,105 @@ import numpy as np
 
 from simscan.e57io import read_e57_world
 
+# These constants match the display defaults of the user's raw-pointcloud exporter.
+EXTRACTOR_WIDTH = 3840
+EXTRACTOR_HEIGHT = 2160
+EXTRACTOR_MARGIN_PX = 55
+EXTRACTOR_PADDING_M = 0.25
+EXTRACTOR_MARKER_PX = 3
+
+
+def extractor_grayscale(hist: np.ndarray, marker_px: int = 3) -> np.ndarray:
+    """Render a point-count histogram using raw_pointcloud.py's log-density curve."""
+    if hist.ndim != 2 or not np.issubdtype(hist.dtype, np.integer):
+        raise ValueError("Expected a 2D integer count histogram")
+    if marker_px < 1 or marker_px % 2 != 1:
+        raise ValueError("marker_px must be a positive odd number")
+    positive = hist[hist > 0]
+    if not positive.size:
+        raise ValueError("No projected scan points")
+    peak = max(2.0, float(np.percentile(positive, 99)))
+    gray = np.minimum(245, np.log1p(hist) / np.log1p(peak) * 185
+                      + np.where(hist > 0, 50, 0)).astype(np.uint8)
+    if marker_px > 1:
+        gray = cv2.dilate(gray, np.ones((marker_px, marker_px), dtype=np.uint8))
+    return gray
+
+
+def render_extractor_view(point_sets: list[dict], folder: Path, floor: float,
+                          ceil: float, width: int = EXTRACTOR_WIDTH,
+                          height: int = EXTRACTOR_HEIGHT,
+                          margin: int = EXTRACTOR_MARGIN_PX,
+                          marker_px: int = EXTRACTOR_MARKER_PX,
+                          padding_m: float = EXTRACTOR_PADDING_M) -> dict:
+    """Display *actual scan returns* in the user's 4K log-density style.
+
+    This is NOT a 2mm physical raster: display resolution depends on the crop.
+    The parallel scan_topdown_2mm.png remains the native metric projection.
+    """
+    if width <= margin * 2 or height <= margin * 2 or margin < 0:
+        raise ValueError("Extractor canvas must exceed twice the margin")
+    if not np.isfinite(padding_m) or padding_m < 0:
+        raise ValueError("Invalid crop padding")
+    low, high = float(floor + .15), float(ceil - .15)
+    parts = []
+    for scan in point_sets:
+        points = np.asarray(scan["xyz"])
+        keep = np.isfinite(points).all(axis=1)
+        keep &= (points[:, 2] >= low) & (points[:, 2] <= high)
+        if np.any(keep):
+            parts.append(points[keep, :2])
+    if not parts:
+        raise ValueError("No laser returns inside the selected floor slice")
+    xy = np.concatenate(parts)
+    if len(xy) < 30:
+        raise ValueError("Too few points to estimate a scan viewport")
+    # Match --bounds auto sampling: clip the isolated returns by 0.3/99.7%
+    # percentiles, while retaining all points inside that final viewport.
+    bounds_lo, bounds_hi = np.percentile(xy, [0.3, 99.7], axis=0)
+    if np.any(bounds_hi - bounds_lo < 0.1):
+        bounds_lo, bounds_hi = xy.min(axis=0), xy.max(axis=0)
+    xmin, ymin = bounds_lo - padding_m
+    xmax, ymax = bounds_hi + padding_m
+    if xmax <= xmin or ymax <= ymin:
+        raise ValueError("Degenerate scan viewport")
+    scale = min((width - 2 * margin) / (xmax - xmin),
+                (height - 2 * margin) / (ymax - ymin))
+    offset_x = (width - (xmax - xmin) * scale) / 2
+    offset_y = (height - (ymax - ymin) * scale) / 2
+    hist = np.zeros((height, width), dtype=np.uint32)
+    flat_hist = hist.ravel()
+    rendered = 0
+    for points in parts:
+        ix = np.floor((points[:, 0] - xmin) * scale + offset_x).astype(np.int64)
+        iy = np.floor((ymax - points[:, 1]) * scale + offset_y).astype(np.int64)
+        inside = (ix >= 0) & (ix < width) & (iy >= 0) & (iy < height)
+        if not np.any(inside):
+            continue
+        loc, counts = np.unique(iy[inside] * width + ix[inside], return_counts=True)
+        flat_hist[loc] += counts.astype(np.uint32)
+        rendered += int(inside.sum())
+    image = extractor_grayscale(hist, marker_px=marker_px)
+    output = folder / "scan_extractor_4k.png"
+    if not cv2.imwrite(str(output), image, [cv2.IMWRITE_PNG_COMPRESSION, 5]):
+        raise OSError(f"Could not write {output}")
+    meta = {
+        "source": "actual synthetic E57 laser points, no geometric overlays",
+        "image": output.name,
+        "pixel_dimensions": [width, height],
+        "xy_bounds_m": [float(xmin), float(ymin), float(xmax), float(ymax)],
+        "effective_visual_pixel_m": float(1 / scale),
+        "z_range_m": [low, high],
+        "points_rendered": rendered,
+        "marker_px": marker_px,
+        "render": "raw_xy_returns_log_density_grayscale",
+        "crop_method": "scan_xy_percentiles_0.3_99.7",
+        "overlays": "none",
+    }
+    (folder / "scan_extractor_4k.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return meta
+
+
 
 def render_scan(e57_path: str | Path, level_dir: str | Path, preview_width: int = 1800):
     folder = Path(level_dir)
@@ -39,7 +138,8 @@ def render_scan(e57_path: str | Path, level_dir: str | Path, preview_width: int 
     low_z, high_z = floor + .18, ceil - .18
     out = np.zeros((h, w), dtype=np.uint8)
     seen = projected = 0
-    for station in read_e57_world(e57_path):
+    point_sets = read_e57_world(e57_path)
+    for station in point_sets:
         xyz = station["xyz"]
         seen += len(xyz)
         good = np.isfinite(xyz).all(axis=1)
@@ -78,6 +178,8 @@ def render_scan(e57_path: str | Path, level_dir: str | Path, preview_width: int 
              "points_in_slice": projected, "occupied_pixels": int(np.count_nonzero(out)),
              "slice_world_z_m": [low_z, high_z],
              "preview_processing": "display-only downsample, gamma, 2px dilation"}
+    extractor = render_extractor_view(point_sets, folder, floor, ceil)
+    stats["extractor_style"] = extractor
     (folder / "scan_topdown_meta.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
     return stats
 
