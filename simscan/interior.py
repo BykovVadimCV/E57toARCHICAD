@@ -442,10 +442,22 @@ class Furnisher:
             if len(pts) == 0:
                 return
             x, y = pts[int(self.rng.integers(len(pts)))]
-            h = self._u((0.2, 0.7))
-            box = Box((x, y, h / 2), (s, self._u((0.25, 0.6)), h), float(self.rng.uniform(0, math.pi)))
-            self._add(layout, "box", "clutter", [box], self._refl(), room.id)
-            g.mark((x - s / 2, y - s / 2, x + s / 2, y + s / 2), 0.1)
+            if self.cfg.procedural and self.rng.random() < self.cfg.p_detailed_clutter:
+                from .clutter import KINDS, make
+                kind = KINDS[int(self.rng.integers(len(KINDS)))]
+                boxes, prims, radius = make(kind, float(x), float(y), s,
+                                            self.rng, float(self.rng.uniform(0, math.pi)))
+                # Reserve the full silhouette, including projecting handles and rods.
+                rect = (x-radius, y-radius, x+radius, y+radius)
+                if not g.is_free(rect, True):
+                    continue
+                self._add(layout, kind, "clutter", boxes, self._refl(), room.id, prims)
+                g.mark(rect, 0.05)
+            else:
+                h = self._u((0.2, 0.7))
+                box = Box((x, y, h / 2), (s, self._u((0.25, 0.6)), h), float(self.rng.uniform(0, math.pi)))
+                self._add(layout, "box", "clutter", [box], self._refl(), room.id)
+                g.mark((x - s / 2, y - s / 2, x + s / 2, y + s / 2), 0.1)
 
     def _clutter_group(self, layout: Layout, room: Room, g: RoomGrid) -> None:
         """A group of separated tall movable panels, labelled as clutter."""
