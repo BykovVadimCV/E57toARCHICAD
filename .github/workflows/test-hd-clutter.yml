@@ -40,7 +40,7 @@ jobs:
             --set interior.p_bare=0.0 \
             --set interior.clutter_per_m2=0.3 \
             --set interior.p_detailed_clutter=1.0 \
-            --count 1 --workers 1 --variants 1 --keep-scans \
+            --seed 42 --count 1 --workers 1 --variants 1 --keep-scans \
             --hd-masks --hd-pixel-mm 2 --out /tmp/simscan_hd_smoke
           python - <<'PY'
           import json
@@ -96,7 +96,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-2mm-scan-and-mask
+          name: native-2mm-scan-and-mask-seed42
           path: |
             /tmp/hd_wall_preview.png
             /tmp/simscan_hd_smoke/scenes/*/L*/scan_topdown_2mm.png
