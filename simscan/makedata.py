@@ -32,7 +32,7 @@ def _vid(k: int) -> str:
 
 
 def _done(root: Path, scene_id: str, variants: int = 1, hd_masks: bool = False,
-          hd_pixel_mm: float = 5.0, hd_min_size: tuple[int, int] = (2048, 1152)) -> bool:
+          hd_pixel_mm: float = 2.0, hd_min_size: tuple[int, int] = (2048, 1152)) -> bool:
     from .dataset_contract import complete_level
     try:
         manifest=json.loads((root/'completed'/(scene_id+'.json')).read_text(encoding='utf-8'))
@@ -125,7 +125,8 @@ def rebuild_splits(root) -> dict:
 def make_dataset(cfg: SynthConfig, out_root, count: int, seed: int = 0, start: int = 0, workers: int = 1,
                  work_dir=None, keep_scans: bool = False, p_thin: float = 0.3, p_shift: float = 0.5,
                  variants: int = 1, log=print, unseen_policy: str = "ignore",
-                 hd_masks: bool = False, hd_pixel_mm: float = 5.0,\n                 hd_min_size: tuple[int, int] = (2048, 1152)) -> dict:
+                 hd_masks: bool = False, hd_pixel_mm: float = 2.0,
+                 hd_min_size: tuple[int, int] = (2048, 1152)) -> dict:
     """variants - растров на один скан: первый как есть, остальные с поворотом облака на
     случайный угол и прореживанием (растр стоит ~5-10 с против ~45 с симуляции скана)."""
     from .netinput import write_meta
@@ -133,7 +134,7 @@ def make_dataset(cfg: SynthConfig, out_root, count: int, seed: int = 0, start: i
     cfg=copy.deepcopy(cfg)
     if count<0 or variants<1 or workers<1:raise ValueError('Invalid count, variants or workers')
     if hd_masks:
-        from .hdmask import make_hd_frame, parse_size
+        from .hdmask import parse_size
         hd_min_size = parse_size(hd_min_size)
         if not np.isfinite(hd_pixel_mm) or not 0.5 <= hd_pixel_mm <= 100:
             raise ValueError('HD pixel size must be between 0.5 and 100 mm')
