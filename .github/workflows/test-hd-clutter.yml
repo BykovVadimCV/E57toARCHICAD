@@ -66,3 +66,34 @@ jobs:
               print('VERIFIED', d, wall.shape, frame['pixel_m'])
           print('End-to-end smoke test PASS: ', len(levels), 'level(s)')
           PY
+      - name: Prepare one mask preview from actual 2 mm output
+        if: always()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import cv2
+          results = list(Path('/tmp/simscan_hd_smoke').glob('scenes/*/L*/wall_mask_hd.png'))
+          if not results:
+              print('No mask generated; nothing to preview')
+          else:
+              source = results[0]
+              mask = cv2.imread(str(source), cv2.IMREAD_GRAYSCALE)
+              h, w = mask.shape
+              scale = min(1, 1600 / max(w, h))
+              scaled = cv2.resize(mask, (round(w * scale), round(h * scale)),
+                                  interpolation=cv2.INTER_AREA)
+              out = Path('/tmp/hd_wall_preview.png')
+              cv2.imwrite(str(out), scaled)
+              print('Original', source, w, h, 'Preview', scaled.shape)
+          PY
+      - name: Upload generated mask and preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-2mm-wall-mask
+          path: |
+            /tmp/hd_wall_preview.png
+            /tmp/simscan_hd_smoke/scenes/*/L*/wall_mask_hd.png
+            /tmp/simscan_hd_smoke/scenes/*/L*/openings_hd.png
+          if-no-files-found: warn
+          retention-days: 7
