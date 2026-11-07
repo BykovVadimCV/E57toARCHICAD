@@ -63,25 +63,31 @@ def _opening_polygons(gt: SceneGT) -> list[tuple[int, np.ndarray]]:
     return out
 
 
-def make_hd_frame(base: dict, polygons: list[np.ndarray], pixel_mm: float = 5.0,
+def make_hd_frame(base: dict, polygons: list[np.ndarray], pixel_mm: float = 2.0,
                   min_size: tuple[int, int] = (2048, 1152),
-                  max_pixels: int = 48_000_000) -> dict:
+                  max_pixels: int = 64_000_000) -> dict:
     """Choose a native metric grid with at least min_size and no clipped walls."""
     if not math.isfinite(pixel_mm) or not 0.5 <= pixel_mm <= 100:
         raise ValueError("HD pixel size must be between 0.5 and 100 mm")
     mw, mh = parse_size(min_size)
     p = pixel_mm / 1000.0
-    bp = float(base["pixel_m"])
-    lo = np.array((base["origin_x"], base["origin_y"]), dtype=float)
-    hi = lo + np.array((base["width"], base["height"]), dtype=float) * bp
+    # HD exports follow the true architectural footprint, not the randomized
+    # 0.5-2.5 m point-cloud frame padding. At 2 mm that padding can waste tens
+    # of millions of pixels while contributing no architectural information.
     if polygons:
-        lo = np.minimum(lo, np.min(np.concatenate(polygons, axis=0), axis=0) - 0.05)
-        hi = np.maximum(hi, np.max(np.concatenate(polygons, axis=0), axis=0) + 0.05)
+        verts = np.concatenate(polygons, axis=0)
+        lo = verts.min(axis=0) - 0.10
+        hi = verts.max(axis=0) + 0.10
+    else:
+        bp = float(base["pixel_m"])
+        lo = np.array((base["origin_x"], base["origin_y"]), dtype=float)
+        hi = lo + np.array((base["width"], base["height"]), dtype=float) * bp
     w = max(mw, int(math.ceil((hi[0] - lo[0]) / p)) + 2)
     h = max(mh, int(math.ceil((hi[1] - lo[1]) / p)) + 2)
     if w * h > max_pixels:
         raise ValueError(
-            f"HD frame {w}x{h} exceeds {max_pixels:,} pixels; increase --hd-pixel-mm"
+            f"HD frame {w}x{h} exceeds {max_pixels:,} pixels at {pixel_mm:g} mm/px; "
+            "reduce the generated footprint or choose a larger --hd-pixel-mm"
         )
     center = (lo + hi) / 2
     origin = np.floor((center - np.array((w, h)) * p / 2) / p) * p
@@ -90,7 +96,7 @@ def make_hd_frame(base: dict, polygons: list[np.ndarray], pixel_mm: float = 5.0,
             "pixel_m": p, "width": w, "height": h}
 
 
-def render_hd_masks(gt: SceneGT, base_frame: dict, pixel_mm: float = 5.0,
+def render_hd_masks(gt: SceneGT, base_frame: dict, pixel_mm: float = 2.0,
                     min_size: tuple[int, int] = (2048, 1152)):
     """Rasterize wall bodies and openings directly, at the requested metric pitch."""
     walls_poly = _wall_polygons(gt)
@@ -114,7 +120,7 @@ def render_hd_masks(gt: SceneGT, base_frame: dict, pixel_mm: float = 5.0,
     return frame, structure, openings, edges
 
 
-def write_hd_level(scene_dir, level_dir, pixel_mm: float = 5.0,
+def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
                    min_size: tuple[int, int] = (2048, 1152)) -> dict:
     """Write independent full-resolution outputs for one generated dataset level."""
     folder = Path(level_dir)
