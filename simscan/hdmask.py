@@ -1,8 +1,8 @@
 """Native high-resolution architectural masks aligned to synthetic dataset world coordinates.
 
 This renderer uses *procedural polygons*, never an upscaled sem.png or a noisy
-point-cloud projection. The HD frame contains both the dataset frame and all
-physical structural footprints; extra pixels are padding, not interpolation.
+point-cloud projection. Its canvas tightly frames physical structural geometry
+while the saved affine maps every HD pixel back into the original world coordinates.
 """
 from __future__ import annotations
 
