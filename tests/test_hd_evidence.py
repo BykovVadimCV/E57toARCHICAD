@@ -30,7 +30,7 @@ def test_native_returns_are_separate_height_bands_without_invented_points():
     bands, stats = project_scan_bands(Source([p[:3], p[3:]]), frame(), 0., 2.7)
     assert stats["total_source_points"] == 6
     assert stats["in_frame_points_all_elevations"] == 6
-    assert [np.count_nonzero(a) for a in bands.values()] == [1, 2, 1, 1, 1]
+    assert [np.count_nonzero(a) for a in bands.values()] == [1, 2, 1, 1, 1, 0]
     # Every positive cell must originate from at least one observed return.
     h = frame()["height"]
     observed = np.zeros((h, h), dtype=bool)
