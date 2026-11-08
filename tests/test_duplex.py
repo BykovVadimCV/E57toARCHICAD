@@ -42,9 +42,14 @@ def test_two_levels_and_stations(duplex):
 
 def test_void_matches_hole_in_floor(duplex):
     _, ds, _ = duplex
-    for lvl in ("L1", "L2"):
-        sem = cv2.imread(str(ds / "scenes" / "scene_00000" / lvl / "sem.png"), cv2.IMREAD_UNCHANGED)
-        assert (sem == VOID).sum() > 500, lvl
+    lower = cv2.imread(str(ds / "scenes" / "scene_00000" / "L1" / "sem.png"), cv2.IMREAD_UNCHANGED)
+    upper = cv2.imread(str(ds / "scenes" / "scene_00000" / "L2" / "sem.png"), cv2.IMREAD_UNCHANGED)
+    # A stair footprint is NOT a missing floor. Earlier labels-5 samples
+    # incorrectly supervised the entire lower stair as class 7.
+    assert (lower == VOID).sum() == 0
+    assert (upper == VOID).sum() > 500
+    with np.load(ds / "scenes" / "scene_00000" / "L1" / "structure_aux.npz") as aux:
+        assert aux["stair_footprint"].sum() > 0
     # на верхнем уровне в проёме пол почти не виден, а вокруг - виден
     x = np.load(ds / "scenes" / "scene_00000" / "L2" / "input.npy").astype(np.float32)
     sem = cv2.imread(str(ds / "scenes" / "scene_00000" / "L2" / "sem.png"), cv2.IMREAD_UNCHANGED)
