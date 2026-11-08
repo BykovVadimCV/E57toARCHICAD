@@ -8,6 +8,8 @@ on:
     paths:
       - 'simscan/**'
       - 'tests/test_hdmask.py'
+      - 'tests/test_hd_evidence.py'
+      - 'tests/test_duplex.py'
       - 'tests/test_clutter_models.py'
       - '.github/workflows/test-hd-clutter.yml'
   workflow_dispatch:
@@ -25,13 +27,13 @@ jobs:
       - name: Install minimal unit-test dependencies
         run: python -m pip install -U pip pytest numpy scipy opencv-python-headless pyyaml pillow shapely
       - name: Run native HD mask and clutter tests
-        run: python -m pytest -q tests/test_hdmask.py tests/test_clutter_models.py tests/test_scan_visual_style.py tests/test_full_scan_and_doors.py
+        run: python -m pytest -q tests/test_hdmask.py tests/test_hd_evidence.py tests/test_clutter_models.py tests/test_scan_visual_style.py tests/test_full_scan_and_doors.py
       - name: Install Open3D system graphics libraries
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libgomp1 libxrender1 libxext6
       - name: Install 3D raycasting dependency
         run: python -m pip install 'open3d>=0.18' 'pye57>=0.4.10'
       - name: Verify closed door raycasting with Open3D
-        run: python -m pytest -q tests/test_full_scan_and_doors.py
+        run: python -m pytest -q tests/test_full_scan_and_doors.py tests/test_duplex.py
       - name: Simulate one complete 2 mm training scene
         run: |
           python -m simscan make-dataset \
@@ -65,7 +67,15 @@ jobs:
               assert (wall != 0).any(), 'Empty wall geometry'
               assert ((wall == 0) | (wall == 255)).all(), 'Wall mask not binary'
               assert ((openings == 0) | (wall == 0)).all(), 'Walls and openings overlap'
-              print('VERIFIED', d, wall.shape, frame['pixel_m'])
+              from simscan.hdmask import complete_hd_level
+              assert complete_hd_level(d, 2., (2048, 1152)), 'Missing paired native scan evidence'
+              evidence = json.loads((d / 'scan_evidence_hd.json').read_text())
+              assert evidence['frame'] == frame
+              for name in ('scan_low_hd.png', 'scan_mid_hd.png', 'scan_high_hd.png',
+                           'scan_floor_hd.png', 'scan_ceiling_hd.png', 'scan_below_hd.png'):
+                  layer = cv2.imread(str(d / name), cv2.IMREAD_UNCHANGED)
+                  assert layer is not None and layer.shape == wall.shape
+              print('VERIFIED paired 2mm input+target', d, wall.shape, frame['pixel_m'])
           layout = json.loads((p / '_work/scene_00000/layout.json').read_text())
           coverage = layout['meta']['coverage']
           assert coverage['required'] is True
