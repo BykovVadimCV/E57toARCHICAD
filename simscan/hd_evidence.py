@@ -11,7 +11,7 @@ import numpy as np
 
 SCAN_HD_FILES = (
     "scan_low_hd.png", "scan_mid_hd.png", "scan_high_hd.png",
-    "scan_floor_hd.png", "scan_ceiling_hd.png",
+    "scan_floor_hd.png", "scan_ceiling_hd.png", "scan_below_hd.png",
 )
 
 
@@ -24,7 +24,7 @@ def project_scan_bands(source, frame: dict, floor_z: float, ceiling_z: float,
     rasterizer: replay its level-detection sampling RNG pass, then its thin pass.
     Does not infer occupied or free space outside observed returns.
     """
-    from .netinput import BAND_MARGIN_M, FLOOR_TOL_M, LOW_TOP, MID_TOP, rotate_xy
+    from .netinput import BAND_MARGIN_M, FLOOR_TOL_M, LOW_TOP, MID_TOP, BELOW_DEPTH_M, rotate_xy
 
     px = float(frame["pixel_m"])
     H, W = int(frame["height"]), int(frame["width"])
@@ -73,6 +73,7 @@ def project_scan_bands(source, frame: dict, floor_z: float, ceiling_z: float,
             (h >= MID_TOP) & (h <= top - BAND_MARGIN_M),
             np.abs(h) < FLOOR_TOL_M,
             np.abs(h - top) < FLOOR_TOL_M,
+            (h < -BAND_MARGIN_M) & (h > -BELOW_DEPTH_M),
         )
         for name, mask in zip(SCAN_HD_FILES, bands):
             if mask.any():
@@ -91,6 +92,7 @@ def project_scan_bands(source, frame: dict, floor_z: float, ceiling_z: float,
             "low": [float(BAND_MARGIN_M), float(LOW_TOP)],
             "mid": [float(LOW_TOP), float(MID_TOP)],
             "high": [float(MID_TOP), float(top - BAND_MARGIN_M)],
+            "below_floor": [-float(BELOW_DEPTH_M), -float(BAND_MARGIN_M)],
         },
     }
     log("2mm scan returns: " + str(stats["occupied_cells_by_band"]))
