@@ -98,7 +98,7 @@ def contract(root):
     if meta.get('version')!=3 or meta.get('labels')!='labels-5':
         raise ValueError(f'{root}: only labels-5 / metadata v3 supported; do not mix older targets')
     policy=read_json(root/'supervision_policy.json')['unseen_policy']
-    keys=['version','labels','pixel_m','rasterizer','channels','classes','dist','orient','heights','exterior_wall']
+    keys=['version','labels','pixel_m','rasterizer','channels','classes','dist','orient','heights','exterior_wall','floor_void_policy']
     return {k:meta.get(k) for k in keys}|{'unseen_policy':policy}
 
 
