@@ -26,7 +26,10 @@ def duplex(tmp_path_factory):
         if r.get("levels") == 2:
             break
     assert r["levels"] == 2
-    dirs = build_scene(tmp / "scene_00000", tmp / "ds", log=lambda *a: None)
+    # The fixture tests labels, not stochastic automatic level detection.
+    # Sparse angular sampling can miss one of the two floors in detect_levels.
+    dirs = build_scene(tmp / "scene_00000", tmp / "ds", use_gt_levels=True,
+                       log=lambda *a: None)
     return tmp / "scene_00000", tmp / "ds", dirs
 
 
