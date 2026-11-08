@@ -96,14 +96,18 @@ def _one(args) -> dict:
                         log=lambda *a, **kw: None, unseen_policy=unseen_policy,
                         preview=False,
                         **_aug(effective_seed, index, k, p_thin, p_shift))
+                if not dirs:
+                    raise ValueError("No valid dataset levels")
+                if hd_masks:
+                    from .hdmask import write_hd_level
+                    # Export native 2-mm return evidence while the actual scan
+                    # source is still open. This uses the same physical points,
+                    # rotated/thinned exactly like each low-res sample.
+                    for level_dir in dirs:
+                        write_hd_level(tmp, level_dir, hd_pixel_mm, hd_min_size,
+                                       source=src)
             finally:
                 src.close()
-            if not dirs:
-                raise ValueError("No valid dataset levels")
-            if hd_masks:
-                from .hdmask import write_hd_level
-                for level_dir in dirs:
-                    write_hd_level(tmp, level_dir, hd_pixel_mm, hd_min_size)
             relative = [Path(d).relative_to(root / "scenes").as_posix() for d in dirs]
             atomic_json(root / "completed" / (scene_id + ".json"),
                         {"variants": variants, "levels": relative,

@@ -16,8 +16,14 @@ import numpy as np
 from .dataset_contract import atomic_json
 from .netinput import SceneGT, _box_quad, _fill, affine
 
-HD_FILES = ("wall_mask_hd.png", "wall_edges_hd.png", "openings_hd.png",
-            "wall_mask_hd.json")
+# HD labels are genuinely rasterized from procedural geometry, while scan
+# evidence is projected directly from simulated XYZ. Keeping them separate
+# prevents a refinement model from accidentally learning ground-truth leakage.
+HD_LABEL_FILES = ("wall_mask_hd.png", "wall_edges_hd.png", "openings_hd.png",
+                  "opening_edges_hd.png", "floor_void_hd.png",
+                  "stair_footprint_hd.png", "supervision_valid_hd.png")
+from .hd_evidence import SCAN_HD_FILES, project_scan_bands, align_coarse_mask
+HD_FILES = HD_LABEL_FILES + SCAN_HD_FILES + ("wall_mask_hd.json", "scan_evidence_hd.json")
 
 
 def parse_size(value: str | tuple[int, int]) -> tuple[int, int]:
@@ -120,9 +126,25 @@ def render_hd_masks(gt: SceneGT, base_frame: dict, pixel_mm: float = 2.0,
     return frame, structure, openings, edges
 
 
+def _rectangles(gt: SceneGT, frame: dict, rects) -> np.ndarray:
+    """Native geometric footprint masks, rotated into the scan's world frame."""
+    mask = np.zeros((frame["height"], frame["width"]), np.uint8)
+    for x0, y0, x1, y1 in rects:
+        poly = gt.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+        _fill(mask, poly, frame, 255)
+    return mask
+
+
 def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
-                   min_size: tuple[int, int] = (2048, 1152)) -> dict:
-    """Write independent full-resolution outputs for one generated dataset level."""
+                   min_size: tuple[int, int] = (2048, 1152),
+                   source=None) -> dict:
+    """Write high-res geometry, raw XYZ evidence, and physically correct voids.
+
+    A live point source is required; otherwise native scan evidence cannot be
+    exported and the sidecars would be incomplete.
+    """
+    if source is None:
+        raise ValueError("HD refinement export requires the simulated point source")
     folder = Path(level_dir)
     meta = json.loads((folder / "scene.json").read_text(encoding="utf-8"))
     level = int(meta["level"][1:]) - 1
@@ -134,39 +156,88 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
                   float(stations[:, 1].mean()))
     frame, wall, openings, edges = render_hd_masks(
         gt, meta["frame"], pixel_mm, min_size)
+    # Aperture boundaries are native pixel edges, not upscaled 20-mm classes.
+    aperture = (openings != 0).astype(np.uint8)
+    contours, _ = cv2.findContours(aperture, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    opening_edges = np.zeros_like(aperture)
+    cv2.drawContours(opening_edges, contours, -1, 255, 1)
+
+    # The lower floor can contain *stairs*, but a stair footprint is not a
+    # missing floor. Only upper-slab physical holes are class-7 floor voids.
+    slab = gt.layout.meta.get("slab", {})
+    true_floor_holes = slab.get("floor", {}).get("holes", [])
+    floor_void = _rectangles(gt, frame, true_floor_holes)
+    stair = gt.layout.meta.get("duplex", {}).get("stair", {})
+    staircase = (_rectangles(gt, frame, [stair["footprint"]])
+                 if level == 0 and stair.get("footprint") else
+                 np.zeros_like(floor_void))
+
+    # Validity comes from existing 20-mm scene supervision. It is *not*
+    # claimed to provide millimetric scan visibility or target evidence.
+    low_valid = np.load(folder / "supervision_valid.npy", allow_pickle=False)
+    valid_hd = align_coarse_mask(low_valid, meta["frame"], frame) * 255
+
+    aug = meta.get("aug", {})
+    layers, stats = project_scan_bands(
+        source, frame, float(meta["floor_z"]), float(meta["ceiling_z"]),
+        rotation=gt.rot, thin=float(aug.get("thin", 0.0)),
+        sampling_seed=meta.get("raster_sample_seed"))
+
     data = {
-        "format": "simscan-native-hd-masks-v1",
+        "format": "simscan-native-hd-masks-v2",
         "frame": frame,
         "pixel_to_world": affine(frame),
-        "source": "physical layout polygons, not a resized raster",
+        "source": "physical layout polygons; not a resized semantic raster",
         "wall_values": {"background": 0, "wall": 255},
         "opening_values": {"background": 0, "door": 1, "window": 2, "passage": 3},
+        "floor_void_values": {"background_or_floor": 0, "missing_upper_floor_slab": 255},
+        "stair_footprint_values": {"background": 0, "lower_floor_stairs": 255},
         "level": meta["level"],
         "rot_deg": rot_deg,
         "min_size_px": list(parse_size(min_size)),
+        "void_policy": "physical_missing_floor_only_v2",
     }
-    for name, image in (("wall_mask_hd.png", wall), ("openings_hd.png", openings),
-                        ("wall_edges_hd.png", edges)):
+    images = (
+        ("wall_mask_hd.png", wall), ("openings_hd.png", openings),
+        ("wall_edges_hd.png", edges), ("opening_edges_hd.png", opening_edges),
+        ("floor_void_hd.png", floor_void),
+        ("stair_footprint_hd.png", staircase),
+        ("supervision_valid_hd.png", valid_hd),
+    )
+    for name, image in (*images, *layers.items()):
         if not cv2.imwrite(str(folder / name), image):
-            raise OSError(f"Could not write HD mask {folder / name}")
+            raise OSError(f"Could not write HD mask/evidence {folder / name}")
     atomic_json(folder / "wall_mask_hd.json", data)
+    atomic_json(folder / "scan_evidence_hd.json", {
+        "format": "simscan-native-hd-scan-evidence-v1",
+        "frame": frame, "pixel_to_world": affine(frame),
+        "low_res_frame": meta["frame"],
+        "supervision_valid_source": "nearest 20mm world-aligned supervision_valid.npy",
+        "layers": list(SCAN_HD_FILES),
+        **stats,
+    })
     return data
 
 
 def complete_hd_level(folder, pixel_mm: float, min_size: tuple[int, int]) -> bool:
-    """Require the optional HD sidecars on resume, not merely a completed low-res level."""
+    """Require *all* native labels and raw-return sidecars for safe resume."""
     try:
         folder = Path(folder)
         if any(not (folder / name).is_file() for name in HD_FILES):
             return False
-        doc = json.loads((folder / HD_FILES[-1]).read_text(encoding="utf-8"))
+        doc = json.loads((folder / "wall_mask_hd.json").read_text(encoding="utf-8"))
+        evidence = json.loads((folder / "scan_evidence_hd.json").read_text(encoding="utf-8"))
+        if doc.get("format") != "simscan-native-hd-masks-v2" or evidence.get("format") != "simscan-native-hd-scan-evidence-v1":
+            return False
         frame = doc["frame"]
         size = (frame["width"], frame["height"])
         if size[0] < min_size[0] or size[1] < min_size[1]:
             return False
         if not math.isclose(frame["pixel_m"], pixel_mm / 1000, abs_tol=1e-10):
             return False
-        for name in HD_FILES[:3]:
+        if evidence["frame"] != frame:
+            return False
+        for name in HD_LABEL_FILES + SCAN_HD_FILES:
             image = cv2.imread(str(folder / name), cv2.IMREAD_UNCHANGED)
             if image is None or image.shape != (size[1], size[0]):
                 return False

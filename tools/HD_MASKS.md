@@ -22,19 +22,38 @@ python -m simscan make-dataset \
 **The default HD pixel size is 2 mm.** `--hd-pixel-mm 2` is shown explicitly
 for clarity. Without `--hd-masks`, existing sample generation is unchanged.
 
-Every generated level receives four additional files:
+Every generated level now contains **paired native high-resolution targets and
+point-cloud evidence**:
 
-- `wall_mask_hd.png`: grayscale uint8, wall = 255, background = 0;
-  door/window openings are removed from the solid-wall mask.
-- `openings_hd.png`: grayscale uint8, background = 0,
-  door = 1, window = 2, full-height passage = 3.
-- `wall_edges_hd.png`: single-pixel boundary of the solid-wall mask.
-- `wall_mask_hd.json`: world-coordinate frame, `pixel_to_world` affine,
-  resolution, legend, floor level and augmentation rotation.
+| File | Contents |
+| --- | --- |
+| `wall_mask_hd.png` | Architectural wall body, uint8 0/255, aperture pixels cut out |
+| `wall_edges_hd.png` | Native single-pixel wall-body edge |
+| `openings_hd.png` | Native host-wall aperture: 0 background, 1 door, 2 window, 3 passage |
+| `opening_edges_hd.png` | Native single-pixel aperture edge (uint8 0/255) |
+| `floor_void_hd.png` | **True missing floor slab only**, uint8 0/255 |
+| `stair_footprint_hd.png` | Lower-floor stairs as their **own** target, NOT floor void |
+| `supervision_valid_hd.png` | 20 mm supervision-valid regions mapped to the HD frame; 0 = ignore |
+| `scan_low_hd.png` | Actual E57 XYZ returns at low elevations, 0/255 occupancy |
+| `scan_mid_hd.png` | Actual XYZ returns at middle elevations, 0/255 occupancy |
+| `scan_high_hd.png` | Actual XYZ returns at upper elevations, 0/255 occupancy |
+| `scan_floor_hd.png` | Actual scan returns within 3 cm of floor |
+| `scan_ceiling_hd.png` | Actual scan returns within 3 cm of ceiling |
+| `scan_below_hd.png` | Actual returns 0.1–3 m **below** selected floor, helpful for floor-hole detection |
+| `wall_mask_hd.json` | Native frame/affine, mask legends, format v2 and floor-void semantics |
+| `scan_evidence_hd.json` | Native frame/affine, band ranges, augmentation and hit-count diagnostics |
 
-The masks are created from the **original procedurally generated geometry**.
-They do not resample `sem.png`, or amplify noise in point-cloud rasters.
-Wall and opening annotations share exactly the same physical frame.
+The masks are created from **original procedural polygons**, never enlarged
+`sem.png`. The six scan layers are projected from **actual simulated scanner
+returns** at their measured XY locations, with no invented returns or
+morphological filling. They are kept separate from the ground-truth geometry.
+All sidecars use the **same pixel-to-world affine and 2 mm grid**.
+
+When training a 2 mm refinement network, use the scan layers and coarse
+network probabilities as inputs; use the wall, aperture, edge and physical
+floor-hole masks as targets, with `supervision_valid_hd.png` as the ignore mask.
+Closed door leaves may generate returns in the aperture: this is expected,
+because an architectural doorway is not synonymous with empty scan space.
 
 Canvas dimensions grow with the physical footprint: an approximately
 12 × 8 m plan takes roughly 6,100 × 4,100 pixels including a small
@@ -49,10 +68,23 @@ the computed size. Use a smaller generated footprint or increase
 takes 64 MB uncompressed, and rendering requires several mask buffers.
 Adjust `--workers` for available RAM.
 
-**Reproducibility:** HD settings are saved in `build_contract.json`,
-and the generator checks that all enabled HD sidecars exist and have
-the correct dimensions when resuming. Use a new output directory for
-a changed pixel size or any change to generator source/settings.
+**Changed class-7 semantics:** `void` now means a physically missing floor
+slab, rather than the lower-floor footprint of a stair. That mistaken
+stair-as-void supervision could encourage false floor holes in scanned rooms.
+The new `meta.json` records
+`floor_void_policy: physical_missing_floor_only_v2`.
+Do **not** silently merge older labels-5 datasets (without this policy) with
+newly generated examples. The `merge_partial_datasets.py` merger now checks
+this policy, and building into an old dataset root is rejected. Regenerate
+training data in a **new dataset folder** and retrain/fine-tune the segmentation
+model before expecting the existing 20 mm model's void predictions to improve.
+A high-resolution mask cannot retroactively change an already trained model.
+
+**Reproducibility:** HD settings are saved in `build_contract.json`.
+Resume now checks all 2 mm scan and supervision sidecars, their dimensions and
+their versioned metadata. Missing or old sidecars cause regeneration, not an
+apparently complete dataset. Use a new output directory for a changed generator
+source, semantic policy, pixel size or other settings.
 
 ## Detailed clutter
 
