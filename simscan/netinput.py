@@ -71,6 +71,7 @@ def meta_doc() -> dict:
 
     return {"version": 3, "labels": LABELS_VERSION, "rasterizer": RASTERIZER_VERSION, "generator": __version__,
             "pixel_m": PIXEL_M, "z_bin_m": Z_BIN_M, "bands_m": [BAND_MARGIN_M, LOW_TOP, MID_TOP],
+            "floor_void_policy": "physical_missing_floor_only_v2",
             "channels": CHANNELS, "classes": {str(k): v for k, v in CLASSES.items()},
             "dist": {"max_m": DIST_MAX_M, "norm": "расстояние до ближайшей видимой грани стены / 0,3, обрезка до 1"},
             "orient": "(cos 2θ, sin 2θ) направления стены-хозяйки в мировой СК (x вправо, y вверх); "
@@ -579,8 +580,12 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
             for tri in triangles:
                 _fill(clutter,gt.poly(vertices[tri,:2]),frame)
     sem[(clutter > 0) & (sem == INTERIOR)] = CLUTTER
-    # проём в перекрытии (верхний этаж) и лестница под ним (нижний) - duplex.py
-    for x0, y0, x1, y1 in lay.meta.get("void_rects", []):
+    # VOID means a *missing floor slab*, not a stair footprint. The lower
+    # staircase retains solid floor/treads and is supervised separately as
+    # aux.stair_footprint. Treating it as a void taught the net to hallucinate
+    # missing floors inside ordinary scanned rooms.
+    floor_holes = lay.meta.get("slab", {}).get("floor", {}).get("holes", [])
+    for x0, y0, x1, y1 in floor_holes:
         m = np.zeros((H, W), np.uint8)
         _fill(m, gt.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]), frame)
         sem[(m > 0) & np.isin(sem, (INTERIOR, CLUTTER))] = VOID
@@ -784,8 +789,10 @@ def write_meta(root: Path) -> None:
     from .dataset_contract import atomic_json
     existing=root/'meta.json'
     if existing.exists() and (root/'scenes').exists() and any((root/'scenes').iterdir()):
-        if json.loads(existing.read_text(encoding='utf-8')).get('labels')!=LABELS_VERSION:
-            raise ValueError('Label contract changed; use a new output dataset')
+        old = json.loads(existing.read_text(encoding='utf-8'))
+        if (old.get('labels') != LABELS_VERSION or
+                old.get('floor_void_policy') != meta_doc()['floor_void_policy']):
+            raise ValueError('Label/physical floor-void contract changed; use a new output dataset')
     atomic_json(existing,meta_doc())
 
 
@@ -891,6 +898,7 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
               "floor_z_gt": gt.floor_z, "ceiling_z_gt": gt.floor_z + gt.ceiling_h,
               "frame": r["frame"], "pixel_to_world": affine(r["frame"]), "rasterizer": RASTERIZER_VERSION,
               "bare": meta.get("bare"), "duplex": gt.layout.meta.get("duplex"), "aug": {"thin": thin, "z_shift": z_shift, "rot_deg": rot_deg},
+              "raster_sample_seed": rs, "floor_void_policy": "physical_missing_floor_only_v2",
               "labels": LABELS_VERSION, "unseen_policy": unseen_policy, "unseen_changed_px": n_out, "unseen_outside_px": n_out if unseen_policy == "outside" else 0}
         (d / "scene.json").write_text(json.dumps(sc, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
         from .dataset_contract import atomic_json,finish_level
