@@ -200,15 +200,21 @@ class MemorySource:
     (округление до микрометров)."""
 
     def __init__(self, scans, poses, chunk: int = 2_000_000):
+        scans,poses=list(scans),list(poses)
+        if len(scans)!=len(poses) or chunk<1:raise ValueError('MemorySource needs matching scans/poses and a positive chunk size')
         self.chunk = chunk
         # float32 - относительно центра стоянок (мировые координаты до сотен метров
         # в float32 потеряли бы доли миллиметра)
         self.center = np.mean([np.asarray(t, float) for _, t in poses], axis=0) if poses else np.zeros(3)
-        parts = []
+        self.points = np.empty((sum(int(np.count_nonzero(s.valid)) for s in scans), 3), np.float32)
+        offset = 0
         for s_, (R, t) in zip(scans, poses):
-            xyz = s_.xyz_local[s_.valid].astype(np.float32).astype(float)
-            parts.append((xyz @ np.asarray(R, float).T + (np.asarray(t, float) - self.center)).astype(np.float32))
-        self.points = np.concatenate(parts) if parts else np.zeros((0, 3), np.float32)
+            for start in range(0, len(s_.valid), chunk):
+                valid=s_.valid[start:start+chunk]
+                xyz=s_.xyz_local[start:start+chunk][valid].astype(np.float32).astype(float)
+                count=len(xyz)
+                self.points[offset:offset+count]=(xyz @ np.asarray(R, float).T + (np.asarray(t, float) - self.center)).astype(np.float32)
+                offset+=count
         self.total = len(self.points)
         st = np.array([np.asarray(t, float) for _, t in poses]).reshape(-1, 3)
         self.stations = st if len(st) >= 2 and float(np.ptp(st[:, :2], axis=0).max()) >= 0.3 else np.zeros((0, 3))

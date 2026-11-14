@@ -70,3 +70,39 @@ def test_auxiliary_annotations_preserved_and_invalid_masks_rejected(tmp_path):
   with np.load(io.BytesIO(z.read('out/scenes/batch02_new/L1/structure_aux.npz'))) as aux:
    assert aux['stair_footprint'].all()
   assert 'a/L1' in z.read('out/splits/train.txt').decode().split()
+
+
+def add_hd_payload(archive_path,folder_prefix):
+ import io
+ from simscan.hdmask import HD_FILES,HD_LABEL_FILES
+ from simscan.hd_evidence import SCAN_HD_FILES
+ payload={}
+ for name in HD_FILES:
+  if name.endswith('.png'):
+   b=io.BytesIO();Image.fromarray(np.zeros((8,10),np.uint8)).save(b,format='PNG');payload[name]=b.getvalue()
+  elif name.endswith('.npz'):
+   b=io.BytesIO();np.savez_compressed(b,counts=np.zeros((8,10),np.uint32));payload[name]=b.getvalue()
+  else:payload[name]=b'{}'
+ payload['hd_complete.json']=json.dumps({'version':1,'files':{n:{'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()} for n,data in payload.items()}}).encode()
+ with zipfile.ZipFile(archive_path,'a') as z:
+  for name,data in payload.items():z.writestr(folder_prefix+name,data)
+ return payload
+
+
+def test_native_hd_payloads_survive_merge_byte_for_byte(tmp_path):
+ base=dataset(tmp_path,'old',[('a','a',.1)],{'train':['a']})
+ batch=dataset(tmp_path,'batch',[('b','b',.2)])
+ payload=add_hd_payload(batch,'batch/scenes/b/L1/')
+ out=tmp_path/'out.zip';report=merge(base,batch,out)
+ assert report['summary']['added_levels']==1
+ with zipfile.ZipFile(out) as z:
+  for name,data in payload.items():assert z.read('out/scenes/batch02_b/L1/'+name)==data
+  assert z.read('out/splits/train.txt').decode().split()[0]=='a/L1'
+
+
+def test_hd_addition_is_not_deduplicated_against_coarse_only_level(tmp_path):
+ base=dataset(tmp_path,'old',[('a','same',.1)],{'train':['a']})
+ batch=dataset(tmp_path,'batch',[('b','same',.1)])
+ add_hd_payload(batch,'batch/scenes/b/L1/')
+ report=merge(base,batch,tmp_path/'out.zip')
+ assert report['summary']['added_levels']==1 and report['summary']['duplicates_skipped']==0

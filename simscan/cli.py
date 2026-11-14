@@ -296,9 +296,10 @@ def main(argv: list[str] | None = None) -> None:
         from .makedata import make_dataset
 
         cfg = load_config(args.config, _parse_set(args.set))
-        make_dataset(cfg, args.out, args.count, args.seed, args.start, args.workers, work_dir=args.work_dir,
+        result = make_dataset(cfg, args.out, args.count, args.seed, args.start, args.workers, work_dir=args.work_dir,
                      keep_scans=args.keep_scans, variants=args.variants, unseen_policy=args.unseen_policy,
                       hd_masks=args.hd_masks, hd_pixel_mm=args.hd_pixel_mm, hd_min_size=args.hd_min_size)
+        if result['errors']:raise SystemExit(1)
         return
     if args.cmd == "dataset":
         from .makedata import pack, rebuild_splits

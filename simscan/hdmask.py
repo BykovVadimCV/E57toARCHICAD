@@ -7,6 +7,8 @@ while the saved affine maps every HD pixel back into the original world coordina
 from __future__ import annotations
 
 import json
+import hashlib
+import zipfile
 import math
 from pathlib import Path
 
@@ -23,7 +25,7 @@ HD_LABEL_FILES = ("wall_mask_hd.png", "wall_edges_hd.png", "openings_hd.png",
                   "opening_edges_hd.png", "floor_void_hd.png",
                   "stair_footprint_hd.png", "supervision_valid_hd.png")
 from .hd_evidence import SCAN_HD_FILES, project_scan_bands, align_coarse_mask
-HD_FILES = HD_LABEL_FILES + SCAN_HD_FILES + ("wall_mask_hd.json", "scan_evidence_hd.json")
+HD_FILES = HD_LABEL_FILES + SCAN_HD_FILES + ("scan_counts_hd.npz", "wall_mask_hd.json", "scan_evidence_hd.json")
 
 
 def parse_size(value: str | tuple[int, int]) -> tuple[int, int]:
@@ -146,6 +148,7 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
     if source is None:
         raise ValueError("HD refinement export requires the simulated point source")
     folder = Path(level_dir)
+    (folder / 'hd_complete.json').unlink(missing_ok=True)
     meta = json.loads((folder / "scene.json").read_text(encoding="utf-8"))
     level = int(meta["level"][1:]) - 1
     gt = SceneGT(scene_dir, level)
@@ -178,10 +181,10 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
     valid_hd = align_coarse_mask(low_valid, meta["frame"], frame) * 255
 
     aug = meta.get("aug", {})
-    layers, stats = project_scan_bands(
+    layers, stats, counts = project_scan_bands(
         source, frame, float(meta["floor_z"]), float(meta["ceiling_z"]),
         rotation=gt.rot, thin=float(aug.get("thin", 0.0)),
-        sampling_seed=meta.get("raster_sample_seed"))
+        sampling_seed=meta.get("raster_sample_seed"), return_counts=True)
 
     data = {
         "format": "simscan-native-hd-masks-v2",
@@ -205,8 +208,9 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
         ("supervision_valid_hd.png", valid_hd),
     )
     for name, image in (*images, *layers.items()):
-        if not cv2.imwrite(str(folder / name), image):
+        if not cv2.imwrite(str(folder / name), image, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
             raise OSError(f"Could not write HD mask/evidence {folder / name}")
+    np.savez_compressed(folder / 'scan_counts_hd.npz', counts=counts)
     atomic_json(folder / "wall_mask_hd.json", data)
     atomic_json(folder / "scan_evidence_hd.json", {
         "format": "simscan-native-hd-scan-evidence-v1",
@@ -214,8 +218,19 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
         "low_res_frame": meta["frame"],
         "supervision_valid_source": "nearest 20mm world-aligned supervision_valid.npy",
         "layers": list(SCAN_HD_FILES),
+        "counts": {"file": "scan_counts_hd.npz", "key": "counts", "dtype": "uint32",
+                   "z_band_m": stats['height_band_m']['low'][:1] + stats['height_band_m']['high'][1:],
+                   "policy": "raw return multiplicity; not binary occupancy"},
         **stats,
     })
+    files = {}
+    for name in (*HD_FILES, 'input.npy'):
+        path = folder / name
+        h = hashlib.sha256()
+        with path.open('rb') as src:
+            for chunk in iter(lambda: src.read(4 * 1024**2), b''): h.update(chunk)
+        files[name] = dict(bytes=path.stat().st_size, sha256=h.hexdigest())
+    atomic_json(folder / 'hd_complete.json', {'version': 1, 'files': files})
     return data
 
 
@@ -224,6 +239,9 @@ def complete_hd_level(folder, pixel_mm: float, min_size: tuple[int, int]) -> boo
     try:
         folder = Path(folder)
         if any(not (folder / name).is_file() for name in HD_FILES):
+            return False
+        marker = json.loads((folder / 'hd_complete.json').read_text(encoding='utf-8'))
+        if any((folder / name).stat().st_size != marker['files'][name]['bytes'] for name in HD_FILES):
             return False
         doc = json.loads((folder / "wall_mask_hd.json").read_text(encoding="utf-8"))
         evidence = json.loads((folder / "scan_evidence_hd.json").read_text(encoding="utf-8"))
@@ -237,10 +255,18 @@ def complete_hd_level(folder, pixel_mm: float, min_size: tuple[int, int]) -> boo
             return False
         if evidence["frame"] != frame:
             return False
+        from PIL import Image
         for name in HD_LABEL_FILES + SCAN_HD_FILES:
-            image = cv2.imread(str(folder / name), cv2.IMREAD_UNCHANGED)
-            if image is None or image.shape != (size[1], size[0]):
-                return False
+            with Image.open(folder / name) as image:
+                if image.size != size: return False
+        # Inspect the NPY header inside the compressed count archive without
+        # allocating another full-resolution raster during resume checks.
+        with zipfile.ZipFile(folder/'scan_counts_hd.npz') as archive:
+            with archive.open('counts.npy') as stream:
+                version=np.lib.format.read_magic(stream)
+                reader=np.lib.format.read_array_header_1_0 if version==(1,0) else np.lib.format.read_array_header_2_0
+                shape,fortran,dtype=reader(stream)
+                if shape!=(size[1],size[0]) or dtype!=np.dtype('uint32') or fortran:return False
         return True
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, EOFError, zipfile.BadZipFile):
         return False

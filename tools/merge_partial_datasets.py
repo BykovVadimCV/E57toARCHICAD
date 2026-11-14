@@ -44,6 +44,12 @@ def valid_level(d):
             with Image.open(d/(n+'.png')) as image:
                 if np.asarray(image).shape!=shape:return False
         for n in ['scene','vector','vector_physical']:read_json(d/(n+'.json'))
+        if any(d.glob('*_hd.*')) or (d/'hd_complete.json').exists():
+            marker=read_json(d/'hd_complete.json')
+            if not marker.get('files') or 'scan_counts_hd.npz' not in marker['files']:return False
+            for name,record in marker['files'].items():
+                if Path(name).name!=name:return False
+                if (d/name).stat().st_size!=record['bytes'] or file_hash(d/name)!=record['sha256']:return False
         return True
     except (OSError,ValueError,KeyError,TypeError):return False
 
@@ -133,6 +139,8 @@ def merge(inputs,out,zip_path=None):
                     h=hashlib.sha256()
                     for n in REQUIRED:
                         if n!='scene.json':h.update(n.encode());h.update(file_hash(level/n).encode())
+                    for n in ('hd_complete.json','structure_aux.npz'):
+                        if (level/n).exists():h.update(n.encode());h.update(file_hash(level/n).encode())
                     token=h.hexdigest()
                     if token in seen:
                         previous=seen[token]

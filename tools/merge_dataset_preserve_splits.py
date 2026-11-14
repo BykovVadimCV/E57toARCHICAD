@@ -39,6 +39,8 @@ def layout_split(key,anchors):
 def identity(hashes):
  h=hashlib.sha256()
  for n in PAYLOAD:h.update(n.encode());h.update(hashes[n].encode())
+ for n in ('hd_complete.json','structure_aux.npz'):
+  if n in hashes:h.update(n.encode());h.update(hashes[n].encode())
  return h.hexdigest()
 
 
@@ -110,7 +112,7 @@ def merge(base_path,batch_path,out_path):
      if rel.startswith('scenes/'):
       old_checks[rel]=h.hexdigest();parts=PurePosixPath(rel).parts
       entry='/'.join(parts[1:3]);name=parts[-1]
-      if name in PAYLOAD:content.setdefault(entry,{})[name]=h.hexdigest()
+      if name in PAYLOAD or name in ('hd_complete.json','structure_aux.npz'):content.setdefault(entry,{})[name]=h.hexdigest()
      if i and i%2400==0:print('Copied',i,'base files',flush=True)
     for entry,hashes in content.items():
      token=identity(hashes);previous=source_hash.get(token)
@@ -121,6 +123,9 @@ def merge(base_path,batch_path,out_path):
     for s,raw in split_bytes.items():out.writestr(output_root+'provenance/original_splits/'+s+'.txt',raw)
     if nr+'build_contract.json' in batch.namelist():out.writestr(output_root+'provenance/new_batch_build_contract.json',batch.read(nr+'build_contract.json'))
     levels=sorted(n.rsplit('/',1)[0] for n in batch.namelist() if n.startswith(nr+'scenes/') and n.endswith('/scene.json'))
+    level_members={}
+    for name in batch.namelist():
+     if not name.endswith('/'):level_members.setdefault(name.rsplit('/',1)[0],[]).append(name)
     new_lists={s:[] for s in SPLITS};all_entries=set(old_members)
     for index,directory in enumerate(levels):
      origin=directory[len(nr+'scenes/'):];sc=json.loads(batch.read(directory+'/scene.json'));key=sc.get('layout_key')
@@ -134,6 +139,9 @@ def merge(base_path,batch_path,out_path):
       report['skipped'].append({'level':origin,'reason':str(exc)});continue
      crc=tuple((n,batch.getinfo(directory+'/'+n).CRC,batch.getinfo(directory+'/'+n).file_size) for n in PAYLOAD)
      hashes={}
+     for n in ('hd_complete.json','structure_aux.npz'):
+      if directory+'/'+n in batch.NameToInfo:
+       hashes[n]=hashlib.sha256(batch.read(directory+'/'+n)).hexdigest()
      if crc in seen_crc:
       for n in PAYLOAD:
        h=hashlib.sha256()
@@ -155,6 +163,14 @@ def merge(base_path,batch_path,out_path):
      optional=directory+'/structure_aux.npz'
      if optional in batch.NameToInfo:
       with batch.open(optional) as src,(stage/'structure_aux.npz').open('wb') as dst:shutil.copyfileobj(src,dst,4*1024**2)
+     # Preserve every direct level sidecar, including HD images, counts and
+     # their completion manifest. Archive paths were checked before extraction.
+     prefix=directory+'/'
+     for member in level_members.get(directory,[]):
+      if not member.startswith(prefix):continue
+      name=member[len(prefix):]
+      if not name or '/' in name or (stage/name).exists():continue
+      with batch.open(member) as src,(stage/name).open('wb') as dst:shutil.copyfileobj(src,dst,4*1024**2)
      try:validate_finite(stage)
      except ValueError as exc:
       report['skipped'].append({'level':origin,'reason':str(exc)});continue
