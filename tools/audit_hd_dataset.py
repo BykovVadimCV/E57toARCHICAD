@@ -7,6 +7,12 @@ from simscan.hdmask import complete_hd_level
 
 def audit(root,deep=True):
     root=Path(root);membership={};groups={};errors=[];levels=0;native_bytes=0
+    from simscan.semantic_contract import COARSE_LABELS_VERSION, COARSE_META_VERSION, OPENING_SEMANTICS_VERSION
+    meta=json.loads((root/'meta.json').read_text(encoding='utf-8'))
+    if (meta.get('version')!=COARSE_META_VERSION or
+            meta.get('labels')!=COARSE_LABELS_VERSION or
+            meta.get('opening_semantics')!=OPENING_SEMANTICS_VERSION):
+        errors.append('Dataset uses obsolete opening semantics; regenerate labels')
     for split in ['train','val','test']:
         entries=(root/'splits'/(split+'.txt')).read_text(encoding='utf-8').split()
         for entry in entries:
@@ -14,6 +20,9 @@ def audit(root,deep=True):
             membership[entry]=split;folder=root/'scenes'/entry
             try:
                 scene=json.loads((folder/'scene.json').read_text(encoding='utf-8'));key=scene['layout_key']
+                if (scene.get('labels')!=COARSE_LABELS_VERSION or
+                        scene.get('opening_semantics')!=OPENING_SEMANTICS_VERSION):
+                    errors.append('Wrong scene opening contract: '+entry)
                 if key in groups and groups[key]!=split:errors.append('Layout crosses splits: '+key)
                 groups[key]=split
                 if scene.get('floor_void_policy')!='physical_missing_floor_only_v2':errors.append('Wrong floor-void policy: '+entry)

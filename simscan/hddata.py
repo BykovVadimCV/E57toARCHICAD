@@ -8,6 +8,8 @@ import json
 import cv2
 import numpy as np
 from .hd_evidence import SCAN_HD_FILES
+from .semantic_contract import (HD_MASK_FORMAT, HD_OPENING_VALUES,
+                                HD_SEMANTIC_CLASSES, OPENING_SEMANTICS_VERSION)
 
 INPUT_CHANNELS = 15
 N_CLASSES = 6  # background, wall, door, window, passage, physical floor void
@@ -19,6 +21,10 @@ def load_patch(folder, top=0, left=0, size=512, cache=None):
     if cache.get('_folder')!=str(folder):cache.clear();cache['_folder']=str(folder)
     meta=json.loads((folder/'wall_mask_hd.json').read_text(encoding='utf-8'))
     evidence=json.loads((folder/'scan_evidence_hd.json').read_text(encoding='utf-8'))
+    if (meta.get('format')!=HD_MASK_FORMAT or
+            meta.get('opening_semantics')!=OPENING_SEMANTICS_VERSION or
+            meta.get('opening_values')!=dict(HD_OPENING_VALUES)):
+        raise ValueError('Incompatible native HD opening semantics: regenerate labels with new contract')
     frame=meta['frame'];coarse_frame=evidence['low_res_frame']
     if frame!=evidence['frame']:raise ValueError('HD scan/target frames differ')
     if top<0 or left<0 or size<32:raise ValueError('Invalid HD crop')
@@ -49,9 +55,10 @@ def load_patch(folder, top=0, left=0, size=512, cache=None):
             flags=cv2.INTER_LINEAR|cv2.WARP_INVERSE_MAP,borderMode=cv2.BORDER_CONSTANT))
     wall=image('wall_mask_hd.png')>0;aperture=image('openings_hd.png');void=image('floor_void_hd.png')>0
     if not np.isin(aperture,[0,1,2,3]).all():raise ValueError('Invalid opening classes')
-    semantic=np.zeros((size,size),np.int64);semantic[wall]=1
-    for label in [1,2,3]:semantic[aperture==label]=label+1
-    semantic[void&~wall&(aperture==0)]=5
+    semantic=np.zeros((size,size),np.int64);semantic[wall]=HD_SEMANTIC_CLASSES['wall']
+    for kind in ('door','window','passage'):
+        semantic[aperture==HD_OPENING_VALUES[kind]]=HD_SEMANTIC_CLASSES[kind]
+    semantic[void&~wall&(aperture==0)]=HD_SEMANTIC_CLASSES['physical_floor_void']
     valid=image('supervision_valid_hd.png')>0
     edges=(image('wall_edges_hd.png')>0)|(image('opening_edges_hd.png')>0)
     return dict(input=np.stack(inputs),sem=semantic,valid=valid,edge=edges.astype(np.float32)[None])

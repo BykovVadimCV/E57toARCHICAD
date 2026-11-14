@@ -40,7 +40,7 @@ point-cloud evidence**:
 | `scan_floor_hd.png` | Actual scan returns within 3 cm of floor |
 | `scan_ceiling_hd.png` | Actual scan returns within 3 cm of ceiling |
 | `scan_below_hd.png` | Actual returns 0.1–3 m **below** selected floor, helpful for floor-hole detection |
-| `wall_mask_hd.json` | Native frame/affine, mask legends, format v2 and floor-void semantics |
+| `wall_mask_hd.json` | Native frame/affine, mask legends, format v3, physical opening semantics and floor-void policy |
 | `scan_evidence_hd.json` | Native frame/affine, band ranges, augmentation and hit-count diagnostics |
 
 The masks are created from **original procedural polygons**, never enlarged
@@ -73,9 +73,10 @@ slab, rather than the lower-floor footprint of a stair. That mistaken
 stair-as-void supervision could encourage false floor holes in scanned rooms.
 The new `meta.json` records
 `floor_void_policy: physical_missing_floor_only_v2`.
-Do **not** silently merge older labels-5 datasets (without this policy) with
-newly generated examples. The `merge_partial_datasets.py` merger now checks
-this policy, and building into an old dataset root is rejected. Regenerate
+Do **not** mix older labels-5 datasets with new labels-6 examples: the
+new semantics distinguishes a leafless passage from a door by physical opening kind,
+not by head height. Existing `best.pt` remains a legacy checkpoint until retrained. The `merge_partial_datasets.py` merger now checks
+metadata and opening semantics contracts, and building into an old dataset root is rejected. Regenerate
 training data in a **new dataset folder** and retrain/fine-tune the segmentation
 model before expecting the existing 20 mm model's void predictions to improve.
 A high-resolution mask cannot retroactively change an already trained model.

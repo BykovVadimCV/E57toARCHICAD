@@ -16,6 +16,8 @@ import cv2
 import numpy as np
 
 from .dataset_contract import atomic_json
+from .semantic_contract import (HD_MASK_FORMAT, HD_OPENING_VALUES,
+                                OPENING_SEMANTICS_VERSION, hd_opening_value)
 from .netinput import SceneGT, _box_quad, _fill, affine
 
 # HD labels are genuinely rasterized from procedural geometry, while scan
@@ -57,14 +59,13 @@ def _wall_polygons(gt: SceneGT) -> list[np.ndarray]:
 
 
 def _opening_polygons(gt: SceneGT) -> list[tuple[int, np.ndarray]]:
-    """1=door, 2=window, 3=full-height opening."""
+    """1=door leaf, 2=window, 3=leafless passage; independent of height."""
     out = []
     for op in gt.layout.openings:
         wall = gt.layout.wall(op.wall_id)
         if wall.role == "open_balcony":
             continue
-        top = wall.height if wall.height is not None else gt.ceiling_h
-        cls = 2 if op.kind == "window" else (3 if op.z1 >= top - 0.05 else 1)
+        cls = hd_opening_value(op.kind)
         poly = gt.wall_quad(wall, op.s - op.width / 2, op.s + op.width / 2,
                             -wall.thickness / 2 - 0.01, wall.thickness / 2 + 0.01)
         out.append((cls, poly))
@@ -187,12 +188,13 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
         sampling_seed=meta.get("raster_sample_seed"), return_counts=True)
 
     data = {
-        "format": "simscan-native-hd-masks-v2",
+        "format": HD_MASK_FORMAT,
+        "opening_semantics": OPENING_SEMANTICS_VERSION,
         "frame": frame,
         "pixel_to_world": affine(frame),
         "source": "physical layout polygons; not a resized semantic raster",
         "wall_values": {"background": 0, "wall": 255},
-        "opening_values": {"background": 0, "door": 1, "window": 2, "passage": 3},
+        "opening_values": dict(HD_OPENING_VALUES),
         "floor_void_values": {"background_or_floor": 0, "missing_upper_floor_slab": 255},
         "stair_footprint_values": {"background": 0, "lower_floor_stairs": 255},
         "level": meta["level"],
@@ -245,7 +247,10 @@ def complete_hd_level(folder, pixel_mm: float, min_size: tuple[int, int]) -> boo
             return False
         doc = json.loads((folder / "wall_mask_hd.json").read_text(encoding="utf-8"))
         evidence = json.loads((folder / "scan_evidence_hd.json").read_text(encoding="utf-8"))
-        if doc.get("format") != "simscan-native-hd-masks-v2" or evidence.get("format") != "simscan-native-hd-scan-evidence-v1":
+        if (doc.get("format") != HD_MASK_FORMAT or
+                doc.get("opening_semantics") != OPENING_SEMANTICS_VERSION or
+                doc.get("opening_values") != dict(HD_OPENING_VALUES) or
+                evidence.get("format") != "simscan-native-hd-scan-evidence-v1"):
             return False
         frame = doc["frame"]
         size = (frame["width"], frame["height"])

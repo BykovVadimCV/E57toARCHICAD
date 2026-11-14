@@ -7,9 +7,12 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 from merge_dataset_preserve_splits import merge,layout_split,REQUIRED
 
 
-def dataset(tmp,name,samples,splits=None,pixel=.02,aux=None):
+def dataset(tmp,name,samples,splits=None,pixel=.02,aux=None,labels_version=5):
  root=tmp/name;(root/'scenes').mkdir(parents=True)
- (root/'meta.json').write_text(json.dumps(dict(version=3,labels='labels-5',pixel_m=pixel)))
+ metadata=dict(version=3 if labels_version==5 else 4,
+               labels=f'labels-{labels_version}',pixel_m=pixel)
+ if labels_version==6:metadata['opening_semantics']='physical-kind-v1'
+ (root/'meta.json').write_text(json.dumps(metadata))
  (root/'supervision_policy.json').write_text(json.dumps(dict(unseen_policy='ignore')))
  for sid,key,value in samples:
   d=root/'scenes'/sid/'L1';d.mkdir(parents=True)
@@ -19,7 +22,10 @@ def dataset(tmp,name,samples,splits=None,pixel=.02,aux=None):
   for n in ['sem','semantic_truth']:Image.fromarray(np.full((4,5),2,np.uint8)).save(d/(n+'.png'))
   for n in ['vector','vector_physical']:(d/(n+'.json')).write_text('{}')
   if aux and sid in aux:np.savez_compressed(d/'structure_aux.npz',stair_footprint=aux[sid])
-  (d/'scene.json').write_text(json.dumps(dict(scene_id=sid,layout_key=key,labels='labels-5',unseen_policy='ignore',frame={'pixel_m':pixel})))
+  scene=dict(scene_id=sid,layout_key=key,labels=f'labels-{labels_version}',
+             unseen_policy='ignore',frame={'pixel_m':pixel})
+  if labels_version==6:scene['opening_semantics']='physical-kind-v1'
+  (d/'scene.json').write_text(json.dumps(scene))
   (d/'complete.json').write_text(json.dumps({'files':{n:(d/n).stat().st_size for n in REQUIRED}}))
  if splits is not None:
   (root/'splits').mkdir()
@@ -106,3 +112,13 @@ def test_hd_addition_is_not_deduplicated_against_coarse_only_level(tmp_path):
  add_hd_payload(batch,'batch/scenes/b/L1/')
  report=merge(base,batch,tmp_path/'out.zip')
  assert report['summary']['added_levels']==1 and report['summary']['duplicates_skipped']==0
+
+
+def test_new_labels6_batches_merge_but_old_versions_do_not_mix(tmp_path):
+ base=dataset(tmp_path,'v4_base',[('a','a',.1)],{'train':['a']},labels_version=6)
+ batch=dataset(tmp_path,'v4_batch',[('b','b',.2)],labels_version=6)
+ report=merge(base,batch,tmp_path/'v4_combined.zip')
+ assert report['summary']['added_levels']==1
+ old=dataset(tmp_path,'v3_batch',[('c','c',.3)],labels_version=5)
+ with pytest.raises(ValueError,match='contracts differ'):
+  merge(base,old,tmp_path/'mixed.zip')

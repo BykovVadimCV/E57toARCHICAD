@@ -1,6 +1,8 @@
 # Generator fixes and performance changes
 
-The new output contract is dataset metadata version 3, labels-5, generator 0.3.0.
+Historical generator-v5 baseline used dataset metadata version 3, labels-5, generator 0.3.0.
+**PR-01 update:** new builds use metadata v4 / labels-6 / physical-kind-v1;
+original labels-5 assets stay frozen and are not valid new targets.
 Use a **new output directory**. Existing datasets are read without being rewritten;
 generation refuses to resume across changed source, settings, seed or augmentation
 parameters. The root `build_contract.json` retains the generation configuration and

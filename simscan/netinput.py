@@ -33,8 +33,13 @@ from pathlib import Path
 
 import numpy as np
 
+from .semantic_contract import (
+    COARSE_LABELS_VERSION, COARSE_META_VERSION, OPENING_SEMANTICS_VERSION,
+    coarse_opening_class, vector_opening_type,
+)
+
 RASTERIZER_VERSION = "netinput-1"
-LABELS_VERSION = "labels-5"           # labels-2: неотсканированные помещения - ignore (ignore_unseen);
+LABELS_VERSION = COARSE_LABELS_VERSION  # labels-6: opening class follows physical kind; labels-2: неотсканированные помещения - ignore (ignore_unseen);
                                       # labels-3: и любое помещение без стоянки - вне видимого;
                                       # labels-4: не ignore, а улица (unseen_to_outside): нет точек - нет помещения
 PIXEL_M = 0.02
@@ -69,7 +74,9 @@ CLUTTER_SKIP_KINDS = ("baseboard",)  # плинтус - часть грани, �
 def meta_doc() -> dict:
     from . import __version__
 
-    return {"version": 3, "labels": LABELS_VERSION, "rasterizer": RASTERIZER_VERSION, "generator": __version__,
+    return {"version": COARSE_META_VERSION, "labels": LABELS_VERSION,
+            "opening_semantics": OPENING_SEMANTICS_VERSION,
+            "rasterizer": RASTERIZER_VERSION, "generator": __version__,
             "pixel_m": PIXEL_M, "z_bin_m": Z_BIN_M, "bands_m": [BAND_MARGIN_M, LOW_TOP, MID_TOP],
             "floor_void_policy": "physical_missing_floor_only_v2",
             "channels": CHANNELS, "classes": {str(k): v for k, v in CLASSES.items()},
@@ -79,7 +86,7 @@ def meta_doc() -> dict:
             "heights": "(низ проёма, верх проёма) / высота потолка; только на классах 3-5, иначе 0",
             "raster": "x = origin_x + (j + 0.5) * px; y = origin_y + (H - 1 - i + 0.5) * px (мировая СК облака)",
             "exterior_wall": f"полоса {EXTERIOR_BAND_M} м наружу от внутренней грани; истинная толщина - в vector.json",
-            "ignore": "labels-5: unsupported physical regions ignored by default; legacy: неотснятое - улица (unseen_to_outside: помещение без стоянки или почти невидимое - "
+            "ignore": "labels-6: unsupported physical regions ignored by default; legacy: неотснятое - улица (unseen_to_outside: помещение без стоянки или почти невидимое - "
                       "вне видимого); в labels-2/3 оно было ignore, в версии 1 - ещё и кольцо в 1 пиксель по границам классов",
             "frame_pad_m": "датасет: пустые поля 0,5-2,5 м с каждой стороны, случайно (вход для реальных - 0,5 м)"}
 
@@ -560,10 +567,7 @@ def label_level(gt: SceneGT, frame: dict) -> dict:
     for o in lay.openings:
         w = lay.wall(o.wall_id)
         top_wall = w.height if w.height is not None else gt.ceiling_h
-        if o.kind == "window":
-            cls = WINDOW
-        else:
-            cls = OPENING if o.z1 >= top_wall - 0.05 else DOOR
+        cls = coarse_opening_class(o.kind)
         q = gt.wall_quad(w, o.s - o.width / 2, o.s + o.width / 2, -w.thickness / 2 - 0.01, w.thickness / 2 + 0.01)
         m = np.zeros((H, W), np.uint8)
         _fill(m, q, frame)
@@ -732,8 +736,9 @@ def vector_doc(gt: SceneGT) -> dict:
     for o in lay.openings:
         w = lay.wall(o.wall_id)
         top_wall = w.height if w.height is not None else gt.ceiling_h
-        typ = "window" if o.kind == "window" else ("opening" if o.z1 >= top_wall - 0.05 else "door")
-        openings.append({"id": f"O{o.id}", "type": typ, "host_wall_id": f"W{w.id}",
+        typ = vector_opening_type(o.kind)
+        openings.append({"id": f"O{o.id}", "type": typ, "physical_kind": o.kind,
+                         "host_wall_id": f"W{w.id}",
                          "offset": round(along(w, 0.0, o.s - o.width / 2), 4),
                          "width": round(along(w, o.s - o.width / 2, o.s + o.width / 2), 4),
                          "sill_z": round(float(o.z0 if typ == "window" else 0.0), 4),
@@ -797,6 +802,8 @@ def write_meta(root: Path) -> None:
     if existing.exists() and (root/'scenes').exists() and any((root/'scenes').iterdir()):
         old = json.loads(existing.read_text(encoding='utf-8'))
         if (old.get('labels') != LABELS_VERSION or
+                old.get('version') != COARSE_META_VERSION or
+                old.get('opening_semantics') != OPENING_SEMANTICS_VERSION or
                 old.get('floor_void_policy') != meta_doc()['floor_void_policy']):
             raise ValueError('Label/physical floor-void contract changed; use a new output dataset')
     atomic_json(existing,meta_doc())
@@ -905,7 +912,8 @@ def build_scene(scene_dir, root, px: float = PIXEL_M, use_gt_levels: bool = Fals
               "frame": r["frame"], "pixel_to_world": affine(r["frame"]), "rasterizer": RASTERIZER_VERSION,
               "bare": meta.get("bare"), "duplex": gt.layout.meta.get("duplex"), "aug": {"thin": thin, "z_shift": z_shift, "rot_deg": rot_deg},
               "raster_sample_seed": rs, "floor_void_policy": "physical_missing_floor_only_v2",
-              "labels": LABELS_VERSION, "unseen_policy": unseen_policy, "unseen_changed_px": n_out, "unseen_outside_px": n_out if unseen_policy == "outside" else 0}
+              "labels": LABELS_VERSION, "opening_semantics": OPENING_SEMANTICS_VERSION,
+              "unseen_policy": unseen_policy, "unseen_changed_px": n_out, "unseen_outside_px": n_out if unseen_policy == "outside" else 0}
         (d / "scene.json").write_text(json.dumps(sc, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
         from .dataset_contract import atomic_json,finish_level
         physical=vector_doc(gt)

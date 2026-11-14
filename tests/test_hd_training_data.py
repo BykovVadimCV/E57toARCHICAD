@@ -3,12 +3,15 @@ import numpy as np
 import cv2
 from simscan.hddata import load_patch
 from simscan.hd_evidence import SCAN_HD_FILES,project_scan_bands
+from simscan.semantic_contract import HD_MASK_FORMAT, HD_OPENING_VALUES, OPENING_SEMANTICS_VERSION
 
 
 def tiny_level(p):
     frame=dict(origin_x=0.,origin_y=0.,pixel_m=.002,width=100,height=80)
     coarse=dict(origin_x=0.,origin_y=0.,pixel_m=.02,width=10,height=8)
-    (p/'wall_mask_hd.json').write_text(json.dumps(dict(frame=frame)))
+    (p/'wall_mask_hd.json').write_text(json.dumps(dict(
+        frame=frame,format=HD_MASK_FORMAT,opening_semantics=OPENING_SEMANTICS_VERSION,
+        opening_values=dict(HD_OPENING_VALUES))))
     (p/'scan_evidence_hd.json').write_text(json.dumps(dict(frame=frame,low_res_frame=coarse)))
     x=np.zeros((8,8,10),np.float16);x[5]=.5;np.save(p/'input.npy',x)
     for name in SCAN_HD_FILES:cv2.imwrite(str(p/name),np.zeros((80,100),np.uint8))
@@ -67,3 +70,16 @@ def test_native_writer_completion_counts_and_training_patch(tmp_path):
     marker=json.loads((level/'hd_complete.json').read_text());assert 'input.npy' in marker['files']
     (level/'scan_counts_hd.npz').write_bytes(b'broken')
     assert not complete_hd_level(level,2.,(32,32))
+
+
+def test_hd_patch_physical_opening_classes_are_consistent(tmp_path):
+    tiny_level(tmp_path)
+    aperture=np.zeros((80,100),np.uint8)
+    aperture[8:12,8:12]=1   # door
+    aperture[18:22,18:22]=2 # window
+    aperture[28:32,28:32]=3 # passage
+    cv2.imwrite(str(tmp_path/'openings_hd.png'),aperture)
+    result=load_patch(tmp_path,0,0,64)
+    assert result['sem'][10,10]==2
+    assert result['sem'][20,20]==3
+    assert result['sem'][30,30]==4

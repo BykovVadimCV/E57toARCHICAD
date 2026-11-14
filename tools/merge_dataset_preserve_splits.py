@@ -1,4 +1,4 @@
-"""Append a labels-5 batch while anchoring all existing sample/layout splits.
+"""Append a compatible labels-5 or labels-6 batch with immutable layout splits.
 
 Streaming ZIP merge: only one new level is extracted at a time. Existing level
 files and IDs are copied unchanged; outputs publish only after full validation.
@@ -89,7 +89,8 @@ def merge(base_path,batch_path,out_path):
   br=check_archive(base);nr=check_archive(batch)
   bm=json.loads(base.read(br+'meta.json'));nm=json.loads(batch.read(nr+'meta.json'))
   if bm!=nm or json.loads(base.read(br+'supervision_policy.json'))!=json.loads(batch.read(nr+'supervision_policy.json')):raise ValueError('Dataset contracts differ')
-  if bm.get('labels')!='labels-5' or bm.get('version')!=3:raise ValueError('Expected labels-5 v3')
+  if (bm.get('version'),bm.get('labels')) not in ((3,'labels-5'),(4,'labels-6')):raise ValueError('Expected labels-5/v3 or labels-6/v4')
+  if bm.get('version')==4 and bm.get('opening_semantics')!='physical-kind-v1':raise ValueError('Missing physical opening kind contract')
   split_bytes,old_members,anchors,old_scenes=read_membership(base,br)
   base_anchors=dict(anchors);report['old_splits']={s:sum(v==s for v in old_members.values()) for s in SPLITS}
   source_hash={'base_sha256':digest(base_path),'batch_sha256':digest(batch_path)};report.update(source_hash)
@@ -130,7 +131,8 @@ def merge(base_path,batch_path,out_path):
     for index,directory in enumerate(levels):
      origin=directory[len(nr+'scenes/'):];sc=json.loads(batch.read(directory+'/scene.json'));key=sc.get('layout_key')
      if not isinstance(key,str) or not key or 'None' in key:raise ValueError('Missing batch layout key')
-     if sc.get('labels')!=bm['labels'] or sc.get('unseen_policy')!=json.loads(base.read(br+'supervision_policy.json'))['unseen_policy']:raise ValueError('Level supervision mismatch')
+     if (sc.get('labels')!=bm['labels'] or sc.get('opening_semantics')!=bm.get('opening_semantics') or
+             sc.get('unseen_policy')!=json.loads(base.read(br+'supervision_policy.json'))['unseen_policy']):raise ValueError('Level supervision mismatch')
      if sc.get('frame',{}).get('pixel_m')!=bm['pixel_m']:raise ValueError('Level pixel size mismatch')
      try:
       marker=json.loads(batch.read(directory+'/complete.json'))['files']

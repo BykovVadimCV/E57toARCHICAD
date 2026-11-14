@@ -1,4 +1,4 @@
-"""Merge completed labels-5 levels from folders, ZIPs or Colab checkpoint folders.
+"""Merge completed compatible labels-5 or labels-6 levels without mixing contracts.
 
 Inputs are read only. No scan generation or Open3D dependency. Run --help for CLI.
 """
@@ -101,10 +101,12 @@ def roots_for(path,staging,issues=None):
 
 def contract(root):
     meta=read_json(root/'meta.json')
-    if meta.get('version')!=3 or meta.get('labels')!='labels-5':
-        raise ValueError(f'{root}: only labels-5 / metadata v3 supported; do not mix older targets')
+    if (meta.get('version'),meta.get('labels')) not in ((3,'labels-5'),(4,'labels-6')):
+        raise ValueError(f'{root}: expected labels-5/v3 or labels-6/v4; do not mix target versions')
+    if meta.get('version')==4 and meta.get('opening_semantics')!='physical-kind-v1':
+        raise ValueError(f'{root}: missing physical opening kind contract')
     policy=read_json(root/'supervision_policy.json')['unseen_policy']
-    keys=['version','labels','pixel_m','rasterizer','channels','classes','dist','orient','heights','exterior_wall','floor_void_policy']
+    keys=['version','labels','opening_semantics','pixel_m','rasterizer','channels','classes','dist','orient','heights','exterior_wall','floor_void_policy']
     return {k:meta.get(k) for k in keys}|{'unseen_policy':policy}
 
 
@@ -133,7 +135,9 @@ def merge(inputs,out,zip_path=None):
                     if not valid_level(level):report['skipped'].append(origin|{'reason':'incomplete or invalid'});continue
                     scene=read_json(level/'scene.json');key=scene.get('layout_key')
                     if not isinstance(key,str) or not key or 'None' in key:raise ValueError(f'Missing layout identity: {level}')
-                    if scene.get('labels')!='labels-5' or scene.get('unseen_policy')!=signature['unseen_policy']:
+                    if (scene.get('labels')!=signature['labels'] or
+                            scene.get('opening_semantics')!=signature['opening_semantics'] or
+                            scene.get('unseen_policy')!=signature['unseen_policy']):
                         raise ValueError(f'Level supervision contract mismatch: {level}')
                     # Metadata differs between runs; learning targets + inputs decide exact duplicates.
                     h=hashlib.sha256()
