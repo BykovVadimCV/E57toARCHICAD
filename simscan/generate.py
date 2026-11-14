@@ -76,7 +76,8 @@ def choose_scan_config(cfg, rng):
 
 
 def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: int = 0,
-                   write_scan: bool = True, training_only: bool = False) -> dict:
+                   write_scan: bool = True, training_only: bool = False,
+                   capture_ray_evidence: bool = False) -> dict:
     """write_scan=False - scan.e57 и метки точек не пишутся, сканы с записанными позами
     возвращаются в summary["_scans"] = (scans, poses) (make-dataset растеризует их из памяти)."""
     t_start = time.perf_counter()
@@ -259,6 +260,9 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
         'scene_build_s':round(t_mesh-t_layout,3),'scan_s':round(t_scanned-t_mesh,3),
         'export_s':round(time.perf_counter()-t_scanned,3)}
     summary["seconds"] = round(time.perf_counter() - t_start, 2)
+    if capture_ray_evidence:
+        from .ray_evidence import capture_direct_returns
+        summary["_ray_samples"] = capture_direct_returns(scans, poses)
     if not write_scan:
         summary["_scans"] = (scans, poses)
     return summary

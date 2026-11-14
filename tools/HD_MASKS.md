@@ -36,7 +36,11 @@ point-cloud evidence**:
 | `supervision_valid_hd.png` | Legacy 20 mm supervision validity, retained for baseline comparison |
 | `observation_occupied_hd.png` | Directly measured returns, not synthetic polygon fills |
 | `observation_support_hd.png` | Within 12 mm of a structural-height return; a weak proxy, not semantic wall evidence |
-| `observation_free_hd.png` | Currently all zeros: station-linked ray free-space evidence is **unavailable** |
+| `observation_free_hd.png` | Union of measured direct-ray paths, NOT evidence of free vertical columns |
+| `ray_free_low_hd.png` | Measured direct-ray path at some height in low structural band |
+| `ray_free_mid_hd.png` | Measured direct-ray path at some height in mid structural band |
+| `ray_free_high_hd.png` | Measured direct-ray path at some height in high structural band |
+| `observation_confirmed_passage_hd.png` | Narrow, ray-backed passage supervision strips, GT used only for selection |
 | `observation_unknown_hd.png` | No direct return or validated free-ray evidence |
 | `observation_uncertain_hd.png` | Physical positive GT lacking nearby return support |
 | `training_valid_hd.png` | Conservative positive gate plus legacy exterior/background negative supervision |
@@ -47,7 +51,7 @@ point-cloud evidence**:
 | `scan_ceiling_hd.png` | Actual scan returns within 3 cm of ceiling |
 | `scan_below_hd.png` | Actual returns 0.1–3 m **below** selected floor, helpful for floor-hole detection |
 | `wall_mask_hd.json` | Native frame/affine, mask legends, format v4, observation contract, physical opening semantics and floor-void policy |
-| `scan_evidence_hd.json` | Native frame/affine, band ranges, augmentation and hit-count diagnostics |
+| `scan_evidence_hd.json` | Native frame/affine, band ranges, augmentation, direct-ray origin provenance and hit-count diagnostics |
 
 The physical GT masks are created from **original procedural polygons**, never enlarged
 `sem.png`. The six scan layers are projected from **actual simulated scanner
@@ -57,7 +61,7 @@ All sidecars use the **same pixel-to-world affine and 2 mm grid**.
 
 When training a 2 mm refinement network, use the scan layers and coarse
 network probabilities as inputs; use the wall, aperture, edge and physical
-floor-hole masks as targets, with `training_valid_hd.png` as the new ignore mask. The legacy `supervision_valid_hd.png` is retained for diagnostics. **See `tools/OBSERVATION_POLICY.md` before training**: open apertures can have no direct returns, so the positive gating needs additional validation before a full training run.
+floor-hole masks as targets, with `training_valid_hd.png` as the new ignore mask. The legacy `supervision_valid_hd.png` is retained for diagnostics. **See `tools/OBSERVATION_POLICY.md` before training**: direct rays can support small parts of open passages, but per-class valid-pixel coverage still requires a pilot-dataset audit before a full training run.
 Closed door leaves may generate returns in the aperture: this is expected,
 because an architectural doorway is not synonymous with empty scan space.
 

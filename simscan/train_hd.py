@@ -30,7 +30,7 @@ def main():
         for item in (tr.items if name=='train' else va.items):
             h.update((Path(a.data)/'scenes'/item/'hd_complete.json').read_bytes())
     source=hashlib.sha256()
-    for name in ['hddata.py','hdnet.py','train_hd.py','observation.py','semantic_contract.py']:source.update(Path(__file__).with_name(name).read_bytes())
+    for name in ['hddata.py','hdnet.py','train_hd.py','observation.py','ray_evidence.py','semantic_contract.py']:source.update(Path(__file__).with_name(name).read_bytes())
     identity=dict(format='hd-refiner-v1',dataset=h.hexdigest(),source=source.hexdigest(),channels=15,classes=6,pixel_m=tr.pixel_m,crop=a.crop,
                   patches_per_level=a.patches_per_level,seed=a.seed,batch=a.batch,lr=a.lr)
     out=Path(a.out);out.mkdir(parents=True,exist_ok=True)

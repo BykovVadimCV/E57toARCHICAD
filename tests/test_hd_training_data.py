@@ -68,8 +68,16 @@ def test_native_writer_completion_counts_and_training_patch(tmp_path):
     np.save(level/'input.npy',np.zeros((8,8,10),np.float16));np.save(level/'supervision_valid.npy',np.ones((8,10),bool))
     class Source:
         def chunks(self):yield np.array([[.02,.01,1.3]]*25+[[.03,.02,0.]])
-    write_hd_level(scene,level,2.,(32,32),source=Source())
+    from simscan.ray_evidence import RaySamples
+    samples = RaySamples(np.array([[.01,.06,1.3]]), np.array([[.25,.06,1.3]]),
+                         np.array([0],dtype=np.int64), 26, 1)
+    write_hd_level(scene,level,2.,(32,32),source=Source(),ray_samples=samples)
     assert complete_hd_level(level,2.,(32,32))
+    metadata=json.loads((level/'scan_evidence_hd.json').read_text())
+    assert metadata['observation']['free_rays_available'] is True
+    assert metadata['observation']['ray_provenance']['station_count']==1
+    assert cv2.imread(str(level/'ray_free_mid_hd.png'),0).any()
+    assert cv2.imread(str(level/'observation_confirmed_passage_hd.png'),0).max()==0
     with np.load(level/'scan_counts_hd.npz') as counts:assert counts['counts'].sum()==25
     p=load_patch(level,0,0,64);assert p['input'].shape==(15,64,64)
     marker=json.loads((level/'hd_complete.json').read_text());assert 'input.npy' in marker['files']

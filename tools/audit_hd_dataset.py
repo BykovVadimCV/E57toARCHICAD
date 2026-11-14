@@ -30,8 +30,15 @@ def audit(root,deep=True):
                 if scene.get('floor_void_policy')!='physical_missing_floor_only_v2':errors.append('Wrong floor-void policy: '+entry)
                 hd=json.loads((folder/'wall_mask_hd.json').read_text(encoding='utf-8'))
                 obs=json.loads((folder/'scan_evidence_hd.json').read_text(encoding='utf-8')).get('observation',{})
-                if obs.get('format')!=OBSERVATION_CONTRACT or obs.get('free_rays_available') is not False:
-                    errors.append('Missing/unsupported observation provenance: '+entry)
+                ray=obs.get('ray_provenance',{})
+                from simscan.ray_evidence import RAY_CONTRACT
+                if (obs.get('format')!=OBSERVATION_CONTRACT
+                        or not isinstance(obs.get('free_rays_available'),bool)
+                        or ray.get('format')!=RAY_CONTRACT
+                        or ray.get('available') is not obs.get('free_rays_available')):
+                    errors.append('Missing/unsupported observation ray provenance: '+entry)
+                if obs.get('confirmed_passage_pixels',0)>0 and not ray.get('available'):
+                    errors.append('Unproven passage positives: '+entry)
                 if not complete_level(folder) or not complete_hd_level(folder,hd['frame']['pixel_m']*1000,hd['min_size_px']):
                     errors.append('Incomplete level: '+entry);continue
                 marker=json.loads((folder/'hd_complete.json').read_text(encoding='utf-8'))

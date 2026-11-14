@@ -8,6 +8,7 @@ import json
 import cv2
 import numpy as np
 from .hd_evidence import SCAN_HD_FILES
+from .observation import OBSERVATION_CONTRACT
 from .semantic_contract import (HD_MASK_FORMAT, HD_OPENING_VALUES,
                                 HD_SEMANTIC_CLASSES, OPENING_SEMANTICS_VERSION)
 
@@ -59,8 +60,8 @@ def load_patch(folder, top=0, left=0, size=512, cache=None):
     for kind in ('door','window','passage'):
         semantic[aperture==HD_OPENING_VALUES[kind]]=HD_SEMANTIC_CLASSES[kind]
     semantic[void&~wall&(aperture==0)]=HD_SEMANTIC_CLASSES['physical_floor_void']
-    if meta.get("observation_contract") != "native-hd-observation-v1" or \
-            evidence.get("observation", {}).get("format") != "native-hd-observation-v1":
+    if meta.get("observation_contract") != OBSERVATION_CONTRACT or \
+            evidence.get("observation", {}).get("format") != OBSERVATION_CONTRACT:
         raise ValueError("Missing native HD observation contract: regenerate HD data")
     valid=image('training_valid_hd.png')>0
     edges=(image('wall_edges_hd.png')>0)|(image('opening_edges_hd.png')>0)

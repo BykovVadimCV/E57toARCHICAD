@@ -83,10 +83,11 @@ def _one(args) -> dict:
         effective_seed = seed + 1_000_003 * attempt
         try:
             r = generate_scene(cfg, tmp, effective_seed, index, write_scan=keep_scan,
-                               training_only=True)
+                               training_only=True, capture_ray_evidence=hd_masks)
             if isinstance(r, dict) and r.get("error"):
                 raise RuntimeError(r["error"])
             t_gen = time.time() - t0
+            ray_samples = r.pop("_ray_samples", None)
             src = E57Source(tmp / "scan.e57") if keep_scan else MemorySource(*r.pop("_scans"))
             dirs = []
             try:
@@ -105,7 +106,7 @@ def _one(args) -> dict:
                     # rotated/thinned exactly like each low-res sample.
                     for level_dir in dirs:
                         write_hd_level(tmp, level_dir, hd_pixel_mm, hd_min_size,
-                                       source=src)
+                                       source=src, ray_samples=ray_samples)
             finally:
                 src.close()
             relative = [Path(d).relative_to(root / "scenes").as_posix() for d in dirs]

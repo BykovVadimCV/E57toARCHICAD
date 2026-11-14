@@ -16,7 +16,7 @@ import numpy as np
 
 from .hd_evidence import SCAN_HD_FILES
 
-OBSERVATION_CONTRACT = "native-hd-observation-v1"
+OBSERVATION_CONTRACT = "native-hd-observation-v2"
 OBSERVATION_FILES = (
     "observation_occupied_hd.png",
     "observation_support_hd.png",
@@ -24,24 +24,54 @@ OBSERVATION_FILES = (
     "observation_unknown_hd.png",
     "observation_uncertain_hd.png",
     "training_valid_hd.png",
+    "ray_free_low_hd.png",
+    "ray_free_mid_hd.png",
+    "ray_free_high_hd.png",
+    "observation_confirmed_passage_hd.png",
 )
 SUPPORT_RADIUS_M = 0.012
 
+
+def return_proximity_support(layers: dict[str, np.ndarray], frame: dict,
+                             radius_m: float = SUPPORT_RADIUS_M) -> np.ndarray:
+    """Low/mid/high return proximity only; never inferred semantic wall evidence."""
+    pitch = float(frame['pixel_m'])
+    if not math.isfinite(radius_m) or not 0 <= radius_m <= 0.05 or not 0 < pitch <= .1:
+        raise ValueError('Invalid return-support radius or raster scale')
+    shape = (int(frame['height']), int(frame['width']))
+    structural = np.zeros(shape, np.uint8)
+    for name in SCAN_HD_FILES[:3]:
+        a = layers[name]
+        if a.shape != shape or a.dtype != np.uint8:
+            raise ValueError('Invalid structural height return band '+name)
+        cv2.bitwise_or(structural, a, dst=structural)
+    radius_px = int(math.ceil(radius_m / pitch))
+    if radius_px:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                           (2*radius_px+1, 2*radius_px+1))
+        structural = cv2.dilate(structural, kernel)
+    structural[structural != 0] = 255
+    return structural
 
 def build_observation_masks(layers: dict[str, np.ndarray], frame: dict,
                             wall: np.ndarray, openings: np.ndarray,
                             floor_void: np.ndarray, legacy_valid: np.ndarray,
                             support_radius_m: float = SUPPORT_RADIUS_M,
-                            free_rays: np.ndarray | None = None) -> tuple[dict[str, np.ndarray], dict]:
+                            free_rays: np.ndarray | None = None,
+                            ray_bands: dict[str, np.ndarray] | None = None,
+                            ray_meta: dict | None = None,
+                            confirmed_passages: np.ndarray | None = None,
+                            precomputed_support: np.ndarray | None = None) -> tuple[dict[str, np.ndarray], dict]:
     """Return 0/255 masks and a JSON-safe provenance summary.
 
     ``support`` means spatial proximity to a structural-height scan *return*,
     NOT an independently verified wall/door/window hit. This deliberately
     errs on the side of masking positive GT without return proximity.
 
-    ``free_rays`` may be passed only when an upstream scanner explicitly
-    supplies trustworthy, height-specific free-ray traces. Without it,
-    ``observation_free_hd.png`` is all zero, and the sidecar says UNAVAILABLE.
+    Only validated station-linked ray_bands with full provenance are accepted.
+    Each 2D free pixel is a measured path at *some* height in that band; it
+    never becomes an automatic negative pixel. Without ray samples all free
+    maps remain zero and the sidecar says unavailable.
     In this version, training background validity continues to follow the
     legacy supervision policy, preserving its exterior false-positive penalty.
     """
@@ -67,7 +97,33 @@ def build_observation_masks(layers: dict[str, np.ndarray], frame: dict,
         # Do not allow a free-space assertion at an observed return endpoint.
         # A 3D projection may legitimately overlap in XY, so full 3D
         # reconciliation belongs to the future ray-evidence contract.
-        raise ValueError("Free-ray input requires validated 3D height-band metadata; not yet supported")
+        raise ValueError("Free-ray input requires validated 3D height-band provenance; use ray_bands")
+
+    from .ray_evidence import RAY_BANDS, RAY_CONTRACT
+    if ray_bands is None:
+        if ray_meta is not None or confirmed_passages is not None:
+            raise ValueError('Ray provenance and passage proof require 3D ray bands')
+        ray_bands = {name: np.zeros(shape, np.uint8) for name in RAY_BANDS}
+        ray_meta = {'format': RAY_CONTRACT, 'available': False,
+                    'reason': 'station_linked_direct_ray_samples_unavailable'}
+    if (ray_meta is None or ray_meta.get('format') != RAY_CONTRACT
+            or not isinstance(ray_meta.get('available'), bool)):
+        raise ValueError('3D ray provenance contract mismatch')
+    for name in RAY_BANDS:
+        image = ray_bands.get(name)
+        if (image is None or image.shape != shape or image.dtype != np.uint8
+                or not np.isin(image, [0, 255]).all()):
+            raise ValueError('Missing or invalid height-specific direct-ray evidence: '+name)
+    if confirmed_passages is None:
+        confirmed_passages = np.zeros(shape, np.uint8)
+    if (confirmed_passages.shape != shape or confirmed_passages.dtype != np.uint8
+            or not np.isin(confirmed_passages, [0, 255]).all()):
+        raise ValueError('Invalid passage ray proof')
+    if not ray_meta['available'] and (any(v.any() for v in ray_bands.values())
+                                      or confirmed_passages.any()):
+        raise ValueError('Cannot claim rays or passage proof without sensor provenance')
+    if np.any((confirmed_passages != 0) & (openings != 3)):
+        raise ValueError('Passage ray proof must be contained in the physical passage target')
 
     # Purely sensor-derived return occupancy, never filled from polygons.
     occupied = np.zeros(shape, np.uint8)
@@ -78,48 +134,51 @@ def build_observation_masks(layers: dict[str, np.ndarray], frame: dict,
     # Local *return proximity* only: floor/ceiling reflections do not provide
     # support for an otherwise unseen wall or opening. These bands include
     # furniture, therefore the summary explicitly names this a weak proxy.
-    structural_height_returns = np.zeros(shape, np.uint8)
-    for name in SCAN_HD_FILES[:3]:
-        cv2.bitwise_or(structural_height_returns, layers[name], dst=structural_height_returns)
-    radius_px = int(math.ceil(support_radius_m / pitch))
-    if radius_px:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
-                                          (2 * radius_px + 1, 2 * radius_px + 1))
-        support = cv2.dilate(structural_height_returns, kernel)
+    if precomputed_support is None:
+        support = return_proximity_support(layers, frame, support_radius_m)
     else:
-        support = structural_height_returns.copy()
-    support[support != 0] = 255
+        if precomputed_support.shape != shape or precomputed_support.dtype != np.uint8:
+            raise ValueError('Invalid precomputed support raster')
+        support = precomputed_support
 
     # A physical polygon is not automatically an observable positive target.
     positive = (wall != 0) | (openings != 0) | (floor_void != 0)
-    unresolved = positive & (support == 0)
-    candidate = (legacy_valid != 0) & (~positive | (support != 0))
+    supported = (support != 0) | (confirmed_passages != 0)
+    unresolved = positive & ~supported
+    candidate = (legacy_valid != 0) & (~positive | supported)
 
-    free = np.zeros(shape, np.uint8)  # no actual ray origins linked to returns
+    free = np.zeros(shape, np.uint8)
+    for ray in ray_bands.values():
+        cv2.bitwise_or(free, ray, dst=free)
     images = {
         "observation_occupied_hd.png": occupied,
         "observation_support_hd.png": support,
         "observation_free_hd.png": free,
-        "observation_unknown_hd.png": cv2.bitwise_not(occupied),
+        "observation_unknown_hd.png": cv2.bitwise_not(cv2.bitwise_or(occupied, free)),
         "observation_uncertain_hd.png": unresolved.astype(np.uint8) * 255,
         "training_valid_hd.png": candidate.astype(np.uint8) * 255,
+        **ray_bands,
+        "observation_confirmed_passage_hd.png": confirmed_passages,
     }
     stats = {
         "format": OBSERVATION_CONTRACT,
         "occupancy_source": "measured_return_pixels_only",
         "support_source": "dilation_of_low_mid_high_return_pixels; not_semantic_evidence",
         "support_radius_m": float(support_radius_m),
-        "free_rays_available": False,
-        "free_rays_policy": "unknown_without_station_linked_3d_ray_paths",
+        "free_rays_available": bool(ray_meta["available"]),
+        "free_rays_policy": "sampled_3d_direct_paths_by_height_band; not_full_vertical_clearance_or_background",
+        "ray_provenance": ray_meta,
         "unknown_policy": "missing_return_is_not_free_space",
         "negative_background_policy": "inherit_20mm_supervision_to_avoid_exterior_hallucinations",
-        "training_valid_policy": "legacy_background_plus_return_proximity_gated_positive_gt_v1",
+        "training_valid_policy": "legacy_background_plus_return_proximity_or_confirmed_passage_gated_positive_gt_v2",
         "legacy_valid_pixels": int(np.count_nonzero(legacy_valid)),
         "observed_return_pixels": int(np.count_nonzero(occupied)),
         "unknown_status_pixels": int(occupied.size - np.count_nonzero(occupied)),
         "return_proximity_pixels": int(np.count_nonzero(support)),
         "physical_positive_pixels": int(np.count_nonzero(positive)),
-        "supported_positive_pixels": int(np.count_nonzero(positive & (support != 0))),
+        "supported_positive_pixels": int(np.count_nonzero(positive & supported)),
+        "confirmed_passage_pixels": int(np.count_nonzero(confirmed_passages)),
+        "free_ray_pixels": int(np.count_nonzero(free)),
         "unsupported_positive_pixels": int(np.count_nonzero(unresolved)),
         "training_valid_pixels": int(np.count_nonzero(candidate)),
     }

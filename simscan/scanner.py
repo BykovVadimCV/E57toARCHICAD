@@ -58,6 +58,7 @@ class ScanResult:
     virtual: np.ndarray        # (N,) bool - точка из отражения в зеркале
     mixed: np.ndarray          # (N,) bool - смешанный пиксель
     diag: dict | None = None   # отладка: истинная дальность, угол падения, кромки, энергия
+    straight_valid: np.ndarray | None = None  # measured hit with unambiguous direct path
 
     @property
     def n_valid(self) -> int:
@@ -350,7 +351,8 @@ class ScanSimulator:
                     "edge": edge, "frac": frac.astype(np.float32), "sigma": sig.astype(np.float32)}
         return ScanResult(station.id, self.nrow, self.ncol, xyz, hit, self.rows, self.cols,
                           np.clip(intensity, 0, 1).astype(np.float32), label, inst,
-                          virtual & hit, mixed & hit, diag)
+                          virtual & hit, mixed & hit, diag,
+                          hit & ~via_special & ~mixed & ~edge)
 
     # --- модель пятна луча ---------------------------------------------------
     def _edges(self, t, hit, inst) -> np.ndarray:

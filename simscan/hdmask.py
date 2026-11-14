@@ -142,7 +142,7 @@ def _rectangles(gt: SceneGT, frame: dict, rects) -> np.ndarray:
 
 def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
                    min_size: tuple[int, int] = (2048, 1152),
-                   source=None) -> dict:
+                   source=None, ray_samples=None) -> dict:
     """Write high-res geometry, raw XYZ evidence, and physically correct voids.
 
     A live point source is required; otherwise native scan evidence cannot be
@@ -189,11 +189,23 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
         rotation=gt.rot, thin=float(aug.get("thin", 0.0)),
         sampling_seed=meta.get("raster_sample_seed"), return_counts=True)
 
+    from .ray_evidence import render_direct_ray_bands, audit_passage_crossings
+    from .observation import return_proximity_support
+    ray_bands, ray_stats, kept_rays = render_direct_ray_bands(
+        ray_samples, frame, float(meta["floor_z"]), float(meta["ceiling_z"]),
+        rotation=gt.rot, thin=float(aug.get("thin", 0.0)),
+        sampling_seed=meta.get("raster_sample_seed"))
+    support = return_proximity_support(layers, frame)
+    confirmed, aperture_stats = audit_passage_crossings(
+        gt, kept_rays, frame, support, openings, float(meta["floor_z"]))
     observation_images, observation_stats = build_observation_masks(
-        layers, frame, wall, openings, floor_void, valid_hd)
+        layers, frame, wall, openings, floor_void, valid_hd,
+        ray_bands=ray_bands, ray_meta=ray_stats,
+        confirmed_passages=confirmed, precomputed_support=support)
 
     observation_stats["objects"] = audit_object_support(
-        gt, frame, observation_images["observation_support_hd.png"])
+        gt, frame, support)
+    observation_stats["objects"]["passage_ray_crossings"] = aperture_stats
 
     data = {
         "format": HD_MASK_FORMAT,
@@ -224,7 +236,7 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
     np.savez_compressed(folder / 'scan_counts_hd.npz', counts=counts)
     atomic_json(folder / "wall_mask_hd.json", data)
     atomic_json(folder / "scan_evidence_hd.json", {
-        "format": "simscan-native-hd-scan-evidence-v2",
+        "format": "simscan-native-hd-scan-evidence-v3",
         "observation": observation_stats,
         "observation_files": list(OBSERVATION_FILES),
         "frame": frame, "pixel_to_world": affine(frame),
@@ -243,7 +255,7 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
         with path.open('rb') as src:
             for chunk in iter(lambda: src.read(4 * 1024**2), b''): h.update(chunk)
         files[name] = dict(bytes=path.stat().st_size, sha256=h.hexdigest())
-    atomic_json(folder / 'hd_complete.json', {'version': 2, 'files': files})
+    atomic_json(folder / 'hd_complete.json', {'version': 3, 'files': files})
     return data
 
 
@@ -262,9 +274,9 @@ def complete_hd_level(folder, pixel_mm: float, min_size: tuple[int, int]) -> boo
                 doc.get("opening_semantics") != OPENING_SEMANTICS_VERSION or
                 doc.get("opening_values") != dict(HD_OPENING_VALUES) or
                 doc.get("observation_contract") != OBSERVATION_CONTRACT or
-                evidence.get("format") != "simscan-native-hd-scan-evidence-v2" or
+                evidence.get("format") != "simscan-native-hd-scan-evidence-v3" or
                 evidence.get("observation", {}).get("format") != OBSERVATION_CONTRACT or
-                marker.get("version") != 2):
+                marker.get("version") != 3):
             return False
         frame = doc["frame"]
         size = (frame["width"], frame["height"])
