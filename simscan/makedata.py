@@ -193,7 +193,7 @@ def make_dataset(cfg: SynthConfig, out_root, count: int, seed: int = 0, start: i
     atomic_json(marker,build)
     from .netinput import validate_supervision_policy
     validate_supervision_policy(root, unseen_policy)
-    write_meta(root)
+    write_meta(root, hd_masks=hd_masks)
     # лишнее для датасета сети не пишем: превью, маски datasetgen, отладку
     cfg.export.preview = cfg.export.unet_mask = cfg.export.debug = cfg.export.free_space_input = False
     cfg.export.write_mesh = False

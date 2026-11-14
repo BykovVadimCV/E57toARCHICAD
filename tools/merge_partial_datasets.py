@@ -106,7 +106,7 @@ def contract(root):
     if meta.get('version')==4 and meta.get('opening_semantics')!='physical-kind-v1':
         raise ValueError(f'{root}: missing physical opening kind contract')
     policy=read_json(root/'supervision_policy.json')['unseen_policy']
-    keys=['version','labels','opening_semantics','pixel_m','rasterizer','channels','classes','dist','orient','heights','exterior_wall','floor_void_policy']
+    keys=['version','labels','opening_semantics','hd_observation_contract','pixel_m','rasterizer','channels','classes','dist','orient','heights','exterior_wall','floor_void_policy']
     return {k:meta.get(k) for k in keys}|{'unseen_policy':policy}
 
 

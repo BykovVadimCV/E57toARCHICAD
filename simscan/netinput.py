@@ -795,18 +795,32 @@ def _split_of(key: str) -> str:
     return "train" if h < 8 else ("val" if h == 8 else "test")
 
 
-def write_meta(root: Path) -> None:
+def write_meta(root: Path, hd_masks: bool | None = None) -> None:
+    """Write dataset identity; never silently drop a native observation contract.
+
+    ``None`` keeps the already established root contract (used by
+    ``build_scene``); an explicit True/False is used by ``make_dataset``.
+    """
     root.mkdir(parents=True, exist_ok=True)
     from .dataset_contract import atomic_json
-    existing=root/'meta.json'
-    if existing.exists() and (root/'scenes').exists() and any((root/'scenes').iterdir()):
-        old = json.loads(existing.read_text(encoding='utf-8'))
+    from .observation import OBSERVATION_CONTRACT
+    existing = root / 'meta.json'
+    old = json.loads(existing.read_text(encoding='utf-8')) if existing.exists() else {}
+    if hd_masks is None:
+        observation = old.get('hd_observation_contract')
+    else:
+        observation = OBSERVATION_CONTRACT if hd_masks else None
+    expected = meta_doc()
+    if observation:
+        expected['hd_observation_contract'] = observation
+    if (root/'scenes').exists() and any((root/'scenes').iterdir()) and old:
         if (old.get('labels') != LABELS_VERSION or
                 old.get('version') != COARSE_META_VERSION or
                 old.get('opening_semantics') != OPENING_SEMANTICS_VERSION or
-                old.get('floor_void_policy') != meta_doc()['floor_void_policy']):
-            raise ValueError('Label/physical floor-void contract changed; use a new output dataset')
-    atomic_json(existing,meta_doc())
+                old.get('floor_void_policy') != expected['floor_void_policy'] or
+                old.get('hd_observation_contract') != observation):
+            raise ValueError('Label/physical floor-void contract changed or HD observation contract changed; use a new output dataset')
+    atomic_json(existing, expected)
 
 
 def validate_supervision_policy(root, policy):

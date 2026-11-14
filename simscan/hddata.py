@@ -59,7 +59,10 @@ def load_patch(folder, top=0, left=0, size=512, cache=None):
     for kind in ('door','window','passage'):
         semantic[aperture==HD_OPENING_VALUES[kind]]=HD_SEMANTIC_CLASSES[kind]
     semantic[void&~wall&(aperture==0)]=HD_SEMANTIC_CLASSES['physical_floor_void']
-    valid=image('supervision_valid_hd.png')>0
+    if meta.get("observation_contract") != "native-hd-observation-v1" or \
+            evidence.get("observation", {}).get("format") != "native-hd-observation-v1":
+        raise ValueError("Missing native HD observation contract: regenerate HD data")
+    valid=image('training_valid_hd.png')>0
     edges=(image('wall_edges_hd.png')>0)|(image('opening_edges_hd.png')>0)
     return dict(input=np.stack(inputs),sem=semantic,valid=valid,edge=edges.astype(np.float32)[None])
 

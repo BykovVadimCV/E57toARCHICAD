@@ -695,3 +695,15 @@ opening/width handling and the benchmark trade-offs.
 ## Native HD overnight generation and refinement
 
 See [OVERNIGHT_DATASET.md](OVERNIGHT_DATASET.md) for Windows SSH background launch, native return counts, exact HD sidecar manifests, first-scene preflight and audit. The optional `python -m simscan.train_hd` entry point trains a separate native refinement network; the legacy PlanNet training interface remains available. Use a fresh dataset folder for the corrected physical-floor-void policy and new HD counts. `python -m simscan.area_pipeline --help` exposes the reviewed staged vectorizer on same-frame saved masks and qualified scan evidence.
+
+
+## PR-02 observation / видимость конструкций
+
+Новый native-HD датасет сохраняет отдельные sensor-return masks и
+`training_valid_hd.png`, чтобы неподтверждённая положительная физическая
+геометрия не становилась автоматической целью обучения. **Не путайте**
+нулевое количество точек с подтверждённым свободным пространством:
+`observation_free_hd.png` пока пустая, поскольку HD-экспорт ещё не содержит
+привязанных к станции трёхмерных трасс лучей. Пока не проверены реальные
+косяки и открытые проходы, нельзя считать новый gate пригодным для
+обучения без диагностики. Подробности: `tools/OBSERVATION_POLICY.md`.

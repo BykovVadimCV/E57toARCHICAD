@@ -33,17 +33,23 @@ point-cloud evidence**:
 | `opening_edges_hd.png` | Native single-pixel aperture edge (uint8 0/255) |
 | `floor_void_hd.png` | **True missing floor slab only**, uint8 0/255 |
 | `stair_footprint_hd.png` | Lower-floor stairs as their **own** target, NOT floor void |
-| `supervision_valid_hd.png` | 20 mm supervision-valid regions mapped to the HD frame; 0 = ignore |
+| `supervision_valid_hd.png` | Legacy 20 mm supervision validity, retained for baseline comparison |
+| `observation_occupied_hd.png` | Directly measured returns, not synthetic polygon fills |
+| `observation_support_hd.png` | Within 12 mm of a structural-height return; a weak proxy, not semantic wall evidence |
+| `observation_free_hd.png` | Currently all zeros: station-linked ray free-space evidence is **unavailable** |
+| `observation_unknown_hd.png` | No direct return or validated free-ray evidence |
+| `observation_uncertain_hd.png` | Physical positive GT lacking nearby return support |
+| `training_valid_hd.png` | Conservative positive gate plus legacy exterior/background negative supervision |
 | `scan_low_hd.png` | Actual E57 XYZ returns at low elevations, 0/255 occupancy |
 | `scan_mid_hd.png` | Actual XYZ returns at middle elevations, 0/255 occupancy |
 | `scan_high_hd.png` | Actual XYZ returns at upper elevations, 0/255 occupancy |
 | `scan_floor_hd.png` | Actual scan returns within 3 cm of floor |
 | `scan_ceiling_hd.png` | Actual scan returns within 3 cm of ceiling |
 | `scan_below_hd.png` | Actual returns 0.1–3 m **below** selected floor, helpful for floor-hole detection |
-| `wall_mask_hd.json` | Native frame/affine, mask legends, format v3, physical opening semantics and floor-void policy |
+| `wall_mask_hd.json` | Native frame/affine, mask legends, format v4, observation contract, physical opening semantics and floor-void policy |
 | `scan_evidence_hd.json` | Native frame/affine, band ranges, augmentation and hit-count diagnostics |
 
-The masks are created from **original procedural polygons**, never enlarged
+The physical GT masks are created from **original procedural polygons**, never enlarged
 `sem.png`. The six scan layers are projected from **actual simulated scanner
 returns** at their measured XY locations, with no invented returns or
 morphological filling. They are kept separate from the ground-truth geometry.
@@ -51,7 +57,7 @@ All sidecars use the **same pixel-to-world affine and 2 mm grid**.
 
 When training a 2 mm refinement network, use the scan layers and coarse
 network probabilities as inputs; use the wall, aperture, edge and physical
-floor-hole masks as targets, with `supervision_valid_hd.png` as the ignore mask.
+floor-hole masks as targets, with `training_valid_hd.png` as the new ignore mask. The legacy `supervision_valid_hd.png` is retained for diagnostics. **See `tools/OBSERVATION_POLICY.md` before training**: open apertures can have no direct returns, so the positive gating needs additional validation before a full training run.
 Closed door leaves may generate returns in the aperture: this is expected,
 because an architectural doorway is not synonymous with empty scan space.
 

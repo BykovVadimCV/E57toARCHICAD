@@ -4,6 +4,7 @@ import cv2
 from simscan.hddata import load_patch
 from simscan.hd_evidence import SCAN_HD_FILES,project_scan_bands
 from simscan.semantic_contract import HD_MASK_FORMAT, HD_OPENING_VALUES, OPENING_SEMANTICS_VERSION
+from simscan.observation import OBSERVATION_CONTRACT, OBSERVATION_FILES
 
 
 def tiny_level(p):
@@ -11,13 +12,17 @@ def tiny_level(p):
     coarse=dict(origin_x=0.,origin_y=0.,pixel_m=.02,width=10,height=8)
     (p/'wall_mask_hd.json').write_text(json.dumps(dict(
         frame=frame,format=HD_MASK_FORMAT,opening_semantics=OPENING_SEMANTICS_VERSION,
+        observation_contract=OBSERVATION_CONTRACT,
         opening_values=dict(HD_OPENING_VALUES))))
-    (p/'scan_evidence_hd.json').write_text(json.dumps(dict(frame=frame,low_res_frame=coarse)))
+    (p/'scan_evidence_hd.json').write_text(json.dumps(dict(frame=frame,low_res_frame=coarse,
+        observation=dict(format=OBSERVATION_CONTRACT))))
     x=np.zeros((8,8,10),np.float16);x[5]=.5;np.save(p/'input.npy',x)
     for name in SCAN_HD_FILES:cv2.imwrite(str(p/name),np.zeros((80,100),np.uint8))
     for name in ['wall_mask_hd.png','openings_hd.png','floor_void_hd.png','wall_edges_hd.png','opening_edges_hd.png']:
         cv2.imwrite(str(p/name),np.zeros((80,100),np.uint8))
     cv2.imwrite(str(p/'supervision_valid_hd.png'),np.full((80,100),255,np.uint8))
+    for name in OBSERVATION_FILES:
+        cv2.imwrite(str(p/name),np.full((80,100),255 if name=='training_valid_hd.png' else 0,np.uint8))
     np.savez_compressed(p/'scan_counts_hd.npz',counts=np.zeros((80,100),np.uint32))
 
 

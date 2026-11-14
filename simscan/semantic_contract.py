@@ -15,7 +15,7 @@ from types import MappingProxyType
 OPENING_SEMANTICS_VERSION = "physical-kind-v1"
 COARSE_LABELS_VERSION = "labels-6"
 COARSE_META_VERSION = 4
-HD_MASK_FORMAT = "simscan-native-hd-masks-v3"
+HD_MASK_FORMAT = "simscan-native-hd-masks-v4"
 
 # Public, immutable maps. Numerical IDs must stay stable for both architectures.
 COARSE_OPENING_CLASSES = MappingProxyType({"door": 3, "window": 4, "passage": 5})

@@ -27,7 +27,9 @@ HD_LABEL_FILES = ("wall_mask_hd.png", "wall_edges_hd.png", "openings_hd.png",
                   "opening_edges_hd.png", "floor_void_hd.png",
                   "stair_footprint_hd.png", "supervision_valid_hd.png")
 from .hd_evidence import SCAN_HD_FILES, project_scan_bands, align_coarse_mask
-HD_FILES = HD_LABEL_FILES + SCAN_HD_FILES + ("scan_counts_hd.npz", "wall_mask_hd.json", "scan_evidence_hd.json")
+from .observation import (OBSERVATION_CONTRACT, OBSERVATION_FILES,
+                          build_observation_masks, audit_object_support)
+HD_FILES = HD_LABEL_FILES + OBSERVATION_FILES + SCAN_HD_FILES + ("scan_counts_hd.npz", "wall_mask_hd.json", "scan_evidence_hd.json")
 
 
 def parse_size(value: str | tuple[int, int]) -> tuple[int, int]:
@@ -187,8 +189,15 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
         rotation=gt.rot, thin=float(aug.get("thin", 0.0)),
         sampling_seed=meta.get("raster_sample_seed"), return_counts=True)
 
+    observation_images, observation_stats = build_observation_masks(
+        layers, frame, wall, openings, floor_void, valid_hd)
+
+    observation_stats["objects"] = audit_object_support(
+        gt, frame, observation_images["observation_support_hd.png"])
+
     data = {
         "format": HD_MASK_FORMAT,
+        "observation_contract": OBSERVATION_CONTRACT,
         "opening_semantics": OPENING_SEMANTICS_VERSION,
         "frame": frame,
         "pixel_to_world": affine(frame),
@@ -209,13 +218,15 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
         ("stair_footprint_hd.png", staircase),
         ("supervision_valid_hd.png", valid_hd),
     )
-    for name, image in (*images, *layers.items()):
+    for name, image in (*images, *observation_images.items(), *layers.items()):
         if not cv2.imwrite(str(folder / name), image, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
             raise OSError(f"Could not write HD mask/evidence {folder / name}")
     np.savez_compressed(folder / 'scan_counts_hd.npz', counts=counts)
     atomic_json(folder / "wall_mask_hd.json", data)
     atomic_json(folder / "scan_evidence_hd.json", {
-        "format": "simscan-native-hd-scan-evidence-v1",
+        "format": "simscan-native-hd-scan-evidence-v2",
+        "observation": observation_stats,
+        "observation_files": list(OBSERVATION_FILES),
         "frame": frame, "pixel_to_world": affine(frame),
         "low_res_frame": meta["frame"],
         "supervision_valid_source": "nearest 20mm world-aligned supervision_valid.npy",
@@ -232,7 +243,7 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
         with path.open('rb') as src:
             for chunk in iter(lambda: src.read(4 * 1024**2), b''): h.update(chunk)
         files[name] = dict(bytes=path.stat().st_size, sha256=h.hexdigest())
-    atomic_json(folder / 'hd_complete.json', {'version': 1, 'files': files})
+    atomic_json(folder / 'hd_complete.json', {'version': 2, 'files': files})
     return data
 
 
@@ -250,7 +261,10 @@ def complete_hd_level(folder, pixel_mm: float, min_size: tuple[int, int]) -> boo
         if (doc.get("format") != HD_MASK_FORMAT or
                 doc.get("opening_semantics") != OPENING_SEMANTICS_VERSION or
                 doc.get("opening_values") != dict(HD_OPENING_VALUES) or
-                evidence.get("format") != "simscan-native-hd-scan-evidence-v1"):
+                doc.get("observation_contract") != OBSERVATION_CONTRACT or
+                evidence.get("format") != "simscan-native-hd-scan-evidence-v2" or
+                evidence.get("observation", {}).get("format") != OBSERVATION_CONTRACT or
+                marker.get("version") != 2):
             return False
         frame = doc["frame"]
         size = (frame["width"], frame["height"])
@@ -261,7 +275,7 @@ def complete_hd_level(folder, pixel_mm: float, min_size: tuple[int, int]) -> boo
         if evidence["frame"] != frame:
             return False
         from PIL import Image
-        for name in HD_LABEL_FILES + SCAN_HD_FILES:
+        for name in HD_LABEL_FILES + OBSERVATION_FILES + SCAN_HD_FILES:
             with Image.open(folder / name) as image:
                 if image.size != size: return False
         # Inspect the NPY header inside the compressed count archive without

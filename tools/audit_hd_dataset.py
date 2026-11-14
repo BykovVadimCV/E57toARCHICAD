@@ -8,10 +8,12 @@ from simscan.hdmask import complete_hd_level
 def audit(root,deep=True):
     root=Path(root);membership={};groups={};errors=[];levels=0;native_bytes=0
     from simscan.semantic_contract import COARSE_LABELS_VERSION, COARSE_META_VERSION, OPENING_SEMANTICS_VERSION
+    from simscan.observation import OBSERVATION_CONTRACT
     meta=json.loads((root/'meta.json').read_text(encoding='utf-8'))
     if (meta.get('version')!=COARSE_META_VERSION or
             meta.get('labels')!=COARSE_LABELS_VERSION or
-            meta.get('opening_semantics')!=OPENING_SEMANTICS_VERSION):
+            meta.get('opening_semantics')!=OPENING_SEMANTICS_VERSION or
+            meta.get('hd_observation_contract')!=OBSERVATION_CONTRACT):
         errors.append('Dataset uses obsolete opening semantics; regenerate labels')
     for split in ['train','val','test']:
         entries=(root/'splits'/(split+'.txt')).read_text(encoding='utf-8').split()
@@ -27,6 +29,9 @@ def audit(root,deep=True):
                 groups[key]=split
                 if scene.get('floor_void_policy')!='physical_missing_floor_only_v2':errors.append('Wrong floor-void policy: '+entry)
                 hd=json.loads((folder/'wall_mask_hd.json').read_text(encoding='utf-8'))
+                obs=json.loads((folder/'scan_evidence_hd.json').read_text(encoding='utf-8')).get('observation',{})
+                if obs.get('format')!=OBSERVATION_CONTRACT or obs.get('free_rays_available') is not False:
+                    errors.append('Missing/unsupported observation provenance: '+entry)
                 if not complete_level(folder) or not complete_hd_level(folder,hd['frame']['pixel_m']*1000,hd['min_size_px']):
                     errors.append('Incomplete level: '+entry);continue
                 marker=json.loads((folder/'hd_complete.json').read_text(encoding='utf-8'))
