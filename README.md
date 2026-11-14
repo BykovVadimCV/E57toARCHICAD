@@ -690,3 +690,8 @@ an apartment-axis preference, and shorter local proposals to face-first fitting.
 `--pred` with snap/cellplan. `--max-fit-segment`, `--near-axis-deg`, and `--contour-margin`
 control the new profile. See [tools/WALL_RULES.md](tools/WALL_RULES.md) for assumptions,
 opening/width handling and the benchmark trade-offs.
+
+
+## Native HD overnight generation and refinement
+
+See [OVERNIGHT_DATASET.md](OVERNIGHT_DATASET.md) for Windows SSH background launch, native return counts, exact HD sidecar manifests, first-scene preflight and audit. The optional `python -m simscan.train_hd` entry point trains a separate native refinement network; the legacy PlanNet training interface remains available. Use a fresh dataset folder for the corrected physical-floor-void policy and new HD counts. `python -m simscan.area_pipeline --help` exposes the reviewed staged vectorizer on same-frame saved masks and qualified scan evidence.

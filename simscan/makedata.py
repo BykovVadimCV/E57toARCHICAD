@@ -36,7 +36,7 @@ def _done(root: Path, scene_id: str, variants: int = 1, hd_masks: bool = False,
     from .dataset_contract import complete_level
     try:
         manifest=json.loads((root/'completed'/(scene_id+'.json')).read_text(encoding='utf-8'))
-        if manifest['variants'] != variants:
+        if manifest['variants'] != variants or not manifest.get('levels'):
             return False
         if hd_masks:
             from .hdmask import complete_hd_level
@@ -135,8 +135,9 @@ def rebuild_splits(root) -> dict:
 
     root = Path(root)
     sp = {"train": [], "val": [], "test": []}
-    allowed=None
+    allowed=None;hd_build=None
     if (root/'build_contract.json').exists():
+        hd_build=json.loads((root/'build_contract.json').read_text(encoding='utf-8'))
         allowed=set()
         for m in (root/'completed').glob('*.json'):
             allowed.update(json.loads(m.read_text(encoding='utf-8'))['levels'])
@@ -144,6 +145,9 @@ def rebuild_splits(root) -> dict:
         if allowed is not None and f.parent.relative_to(root/'scenes').as_posix() not in allowed:continue
         from .dataset_contract import complete_level
         if not complete_level(f.parent):continue
+        if hd_build and hd_build.get('hd_masks'):
+            from .hdmask import complete_hd_level
+            if not complete_hd_level(f.parent,hd_build['hd_pixel_mm'],hd_build['hd_min_size']):continue
         sc = json.loads(f.read_text(encoding="utf-8"))
         sp[_split_of(sc["layout_key"])].append(f"{f.parent.parent.name}/{f.parent.name}")
     (root / "splits").mkdir(parents=True, exist_ok=True)
@@ -170,7 +174,13 @@ def make_dataset(cfg: SynthConfig, out_root, count: int, seed: int = 0, start: i
             raise ValueError('HD pixel size must be between 0.5 and 100 mm')
     root = Path(out_root)
     from .dataset_contract import fingerprint,atomic_json
+    from importlib.metadata import version,PackageNotFoundError
+    runtime={}
+    for name in ['numpy','scipy','opencv-python-headless','shapely','open3d','pye57']:
+        try:runtime[name]=version(name)
+        except PackageNotFoundError:runtime[name]=None
     build={'fingerprint':fingerprint(cfg),'config':config_to_dict(cfg),'seed':seed,'variants':variants,
+           'runtime':runtime,
            'p_thin':p_thin,'p_shift':p_shift,'unseen_policy':unseen_policy,
            'hd_masks':hd_masks,'hd_pixel_mm':hd_pixel_mm if hd_masks else None,
            'hd_min_size':hd_min_size if hd_masks else None}

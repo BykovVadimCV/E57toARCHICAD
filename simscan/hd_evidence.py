@@ -17,7 +17,7 @@ SCAN_HD_FILES = (
 
 def project_scan_bands(source, frame: dict, floor_z: float, ceiling_z: float,
                        rotation=None, thin: float = 0.0, sampling_seed: int | None = None,
-                       log=lambda *_: None):
+                       log=lambda *_: None, return_counts: bool = False):
     """Project raw scan returns into five binary height bands at native metric pitch.
 
     With the same point order/seed, the optional dropout follows the low-res
@@ -38,6 +38,7 @@ def project_scan_bands(source, frame: dict, floor_z: float, ceiling_z: float,
         raise ValueError("sampling_seed is required for matching thinned samples")
 
     layers = {name: np.zeros((H, W), np.uint8) for name in SCAN_HD_FILES}
+    counts = np.zeros((H, W), np.uint32) if return_counts else None
     rng = np.random.default_rng(sampling_seed) if thin else None
     if rng is not None:
         # The 20-mm rasterizer draws one random sample per source return in
@@ -67,6 +68,10 @@ def project_scan_bands(source, frame: dict, floor_z: float, ceiling_z: float,
         h = points[ok, 2] - floor_z
         flat = iy[ok] * W + ix[ok]
         projected += len(flat)
+        if counts is not None:
+            structural = (h >= BAND_MARGIN_M) & (h <= top - BAND_MARGIN_M)
+            cells, numbers = np.unique(flat[structural], return_counts=True)
+            counts.ravel()[cells] += numbers.astype(np.uint32)
         bands = (
             (h >= BAND_MARGIN_M) & (h < LOW_TOP),
             (h >= LOW_TOP) & (h < MID_TOP),
@@ -96,7 +101,7 @@ def project_scan_bands(source, frame: dict, floor_z: float, ceiling_z: float,
         },
     }
     log("2mm scan returns: " + str(stats["occupied_cells_by_band"]))
-    return layers, stats
+    return (layers, stats, counts) if return_counts else (layers, stats)
 
 
 def align_coarse_mask(coarse: np.ndarray, coarse_frame: dict, target_frame: dict):
