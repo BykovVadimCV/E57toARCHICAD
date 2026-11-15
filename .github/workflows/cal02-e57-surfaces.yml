@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install bounded numerical runtime
-        run: python -m pip install 'numpy>=1.26,<3' 'pytest>=8,<10'
+        run: python -m pip install 'numpy>=1.26,<3' 'pytest>=8,<10' 'PyYAML>=6,<7'
       - name: Test streaming reservoir, vertical planes, and uncertainty rules
         env:
           PYTHONPATH: .

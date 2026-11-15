@@ -1,0 +1,89 @@
+name: CAL-02 original real E57 surface audit
+
+on:
+  push:
+    branches: [fix/native-hd-v4]
+    paths:
+      - 'tools/calibrate_e57_surfaces.py'
+      - '.github/workflows/cal02-real-e57.yml'
+  workflow_dispatch:
+
+# Only derived aggregate metrics are uploaded. Raw E57 data never enter artifacts.
+permissions:
+  contents: read
+
+jobs:
+  real-e57-surfaces:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: mikluhi
+            drive_id: 13FczZrxi3eRVPvKubWo9WOMrgN6Kqdb9
+            size: '491343872'
+            sha256: '473fe526d139657baa3654ac9cc82681d5e656ee19da5f6d5c57167aa46d9975'
+          - label: barklaya
+            drive_id: 1JfTGRgpGdqKho50QKkGoEscgup9aErSn
+            size: '749791232'
+            sha256: 'a7f1352a2ae2458f1ca11c33b220f582070ea7b2c3834a32bc53ba6531b4be95'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install bounded reading runtime
+        run: python -m pip install 'numpy>=1.26,<3' 'gdown>=5.2,<6'
+      - name: Download and verify original E57, no logged coordinates
+        env:
+          DRIVE_ID: ${{ matrix.drive_id }}
+          ORIGINAL_SIZE: ${{ matrix.size }}
+          ORIGINAL_SHA256: ${{ matrix.sha256 }}
+        run: |
+          python - <<'PY'
+          import os,hashlib
+          from pathlib import Path
+          import gdown
+          output=Path('/tmp/CAL02_original.e57')
+          result=gdown.download(id=os.environ['DRIVE_ID'],output=str(output),quiet=True)
+          if not result or not output.is_file():
+              raise RuntimeError('Shared Drive file cannot be downloaded anonymously. Use Colab notebook with Google Drive mount.')
+          actual_size=output.stat().st_size
+          expected_size=int(os.environ['ORIGINAL_SIZE'])
+          if actual_size!=expected_size: raise ValueError(f'Size mismatch: {actual_size} versus {expected_size}')
+          h=hashlib.sha256()
+          with output.open('rb') as f:
+              for block in iter(lambda:f.read(8*1024*1024),b''):
+                  h.update(block)
+          if h.hexdigest()!=os.environ['ORIGINAL_SHA256']:
+              raise ValueError('Original E57 SHA256 mismatch')
+          print('E57 original size and SHA256 verified, bytes:',actual_size)
+          PY
+      - name: Header-only provenance inspection
+        env:
+          PYTHONPATH: .
+        run: |
+          python tools/calibrate_e57_surfaces.py --e57 /tmp/CAL02_original.e57 \
+            --metadata-only --out /tmp/cal02_real/header
+      - name: Stream original E57 and measure local wall-plane residuals
+        env:
+          PYTHONPATH: .
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+        run: |
+          python tools/calibrate_e57_surfaces.py --e57 /tmp/CAL02_original.e57 \
+            --out /tmp/cal02_real/surfaces --max-sample 250000 --chunk 250000 \
+            --max-lines 5 --max-patches 24 --seed 42
+      - name: Upload ONLY derived report, never raw scans or point samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cal02-real-e57-${{ matrix.label }}
+          path: /tmp/cal02_real/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Delete downloaded original
+        if: always()
+        run: rm -f /tmp/CAL02_original.e57
