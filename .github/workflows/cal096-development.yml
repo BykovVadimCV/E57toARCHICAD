@@ -31,7 +31,7 @@ jobs:
             'numpy>=2.0,<3' 'scipy>=1.11' 'shapely>=2,<3' \
             'open3d>=0.18,<0.21' 'pye57>=0.4.10' \
             'opencv-python-headless>=4.8' 'pyyaml>=6' 'pillow>=10' \
-            'pytest>=8,<10'
+            'pytest>=8,<10' 'matplotlib>=3.8'
       - name: CAL-09.1 through CAL-09.6 and wall regressions
         env:
           PYTHONPATH: .:tools
