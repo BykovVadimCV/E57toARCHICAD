@@ -120,3 +120,43 @@ a small exploratory sample.
 Even a passing oracle metric cannot override the original failed
 CAL-09 blind top-24 observed-patch gates. Production YAML, original
 real E57, GT masks and model weights are not updated.
+
+
+## Final results (frozen new-seed holdout)
+
+[Successful GitHub Actions run](https://github.com/BykovVadimCV/E57toARCHICAD/actions/runs/43741721999)
+
+[Canonical JSON and report artifact](https://github.com/BykovVadimCV/E57toARCHICAD/actions/runs/43741721999/artifacts/14172623288)
+
+All 48 scanner simulations completed; 60 regression tests and actual raycast
+smoke passed. Selection on development only: **shape4p5_cc2**, i.e.
+observed subcell_shape >=4.5mm and 4-connected component size >=2.
+Only this and shape4p5_cc3 met both development FPR restrictions.
+
+| Rule | Mesh | Independent mean recall | Mean FPR | GT cluster recall |
+|---|---:|---:|---:|---:|
+| legacy MAD6 | 0.30 | 3.7% | 6.8% | 1.6% |
+| legacy MAD6 | 0.10 | 15.2% | 6.2% | 3.1% |
+| raw CAL-09.3 shape4 | 0.30 | 51.1% | 20.4% | 38.0% |
+| raw CAL-09.3 shape4 | 0.10 | 47.6% | 22.2% | 29.2% |
+| selected shape4p5_cc2 | 0.30 | 15.7% | 9.3% | 19.8% |
+| selected shape4p5_cc2 | 0.10 | 21.1% | 10.6% | 26.0% |
+
+**Decision: CAL094_ORACLE_SPATIAL_DIAGNOSTIC_NOT_ESTABLISHED**.
+
+All four engineering criteria on the 0.10m mesh **failed**:
+- Recall 21.1% <40%.
+- FPR 10.6% >10%.
+- Cluster recall 26.0% <35%.
+- Gain over MAD6 +5.9 percentage points <15.
+
+Hard spatial filtering almost halved *this holdout's* false-positive rate
+relative to unfiltered shape4, but eliminated many true detections.
+The earlier CAL-09.3 FPR=13.2% came from a **different seed holdout**,
+so that contrast is not a paired effect. Neither set may now be reused
+to tune follow-on rules without invalidating independent assessment.
+
+Do not promote this detector or modify production. A next study must
+use fresh seeds and should investigate probabilistic spatial evidence
+or restore blind physical-wall extraction, instead of post-hoc adjusting
+these thresholds on the used holdout.
