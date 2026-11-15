@@ -115,21 +115,21 @@ jobs:
           OPEN3D_CPU_RENDERING: 'true'
         run: |
           python -u tools/validate_cal096_blind_geometry.py \
-            --out /tmp/cal096_seed_\${{ matrix.seed }} \
-            --seed \${{ matrix.seed }} \
+            --out /tmp/cal096_seed_${{ matrix.seed }} \
+            --seed ${{ matrix.seed }} \
             --angular-step-deg 0.10 --max-points 200000
       - name: Upload development seed shard
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cal096-development-seed-\${{ matrix.seed }}
-          path: /tmp/cal096_seed_\${{ matrix.seed }}/cal096_seed_\${{ matrix.seed }}.json
+          name: cal096-development-seed-${{ matrix.seed }}
+          path: /tmp/cal096_seed_${{ matrix.seed }}/cal096_seed_${{ matrix.seed }}.json
           retention-days: 30
           if-no-files-found: warn
 
   cal096-development-aggregate:
     needs: cal096-development-seed
-    if: \${{ needs.cal096-development-seed.result == 'success' }}
+    if: ${{ needs.cal096-development-seed.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
