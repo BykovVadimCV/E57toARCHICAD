@@ -1,0 +1,254 @@
+{
+  "format": "cal03-registered-synthetic-vs-real-plane-residuals-v1",
+  "real_reference": {
+    "files": 2,
+    "median_mad_mm_by_file": [
+      1.4731,
+      2.7332
+    ],
+    "site_heterogeneity_ratio": 1.855,
+    "physical_station_count": "unknown"
+  },
+  "comparisons": {
+    "baseline": {
+      "valid_scenes": 2,
+      "attempted_scenes": 2,
+      "per_scene_median_mad_mm": [
+        5.0155,
+        5.435
+      ],
+      "per_scene_median_rms_mm": [
+        5.31,
+        6.2852
+      ],
+      "median_mad_mm": 5.2252,
+      "median_rms_mm": 5.7976,
+      "per_patch_mad_mm": {
+        "p10": 2.9978,
+        "median": 5.1604,
+        "p90": 13.0828
+      },
+      "real_site_mad_medians_mm": [
+        1.4731,
+        2.7332
+      ],
+      "median_mad_difference_from_real_low_mm": 3.7521,
+      "median_mad_difference_from_real_high_mm": 2.492
+    },
+    "high_registration": {
+      "valid_scenes": 2,
+      "attempted_scenes": 2,
+      "per_scene_median_mad_mm": [
+        4.671,
+        7.6115
+      ],
+      "per_scene_median_rms_mm": [
+        5.241,
+        9.0318
+      ],
+      "median_mad_mm": 6.1413,
+      "median_rms_mm": 7.1364,
+      "per_patch_mad_mm": {
+        "p10": 2.9889,
+        "median": 5.718,
+        "p90": 15.0293
+      },
+      "real_site_mad_medians_mm": [
+        1.4731,
+        2.7332
+      ],
+      "median_mad_difference_from_real_low_mm": 4.6682,
+      "median_mad_difference_from_real_high_mm": 3.4081
+    },
+    "high_unevenness": {
+      "valid_scenes": 2,
+      "attempted_scenes": 2,
+      "per_scene_median_mad_mm": [
+        7.9148,
+        6.9512
+      ],
+      "per_scene_median_rms_mm": [
+        7.6836,
+        7.9191
+      ],
+      "median_mad_mm": 7.433,
+      "median_rms_mm": 7.8014,
+      "per_patch_mad_mm": {
+        "p10": 4.8851,
+        "median": 7.7997,
+        "p90": 13.9627
+      },
+      "real_site_mad_medians_mm": [
+        1.4731,
+        2.7332
+      ],
+      "median_mad_difference_from_real_low_mm": 5.9599,
+      "median_mad_difference_from_real_high_mm": 4.6998
+    },
+    "low_registration": {
+      "valid_scenes": 2,
+      "attempted_scenes": 2,
+      "per_scene_median_mad_mm": [
+        4.786,
+        4.2557
+      ],
+      "per_scene_median_rms_mm": [
+        5.2839,
+        4.2478
+      ],
+      "median_mad_mm": 4.5208,
+      "median_rms_mm": 4.7659,
+      "per_patch_mad_mm": {
+        "p10": 2.8595,
+        "median": 4.4331,
+        "p90": 9.3245
+      },
+      "real_site_mad_medians_mm": [
+        1.4731,
+        2.7332
+      ],
+      "median_mad_difference_from_real_low_mm": 3.0477,
+      "median_mad_difference_from_real_high_mm": 1.7876
+    },
+    "low_unevenness": {
+      "valid_scenes": 2,
+      "attempted_scenes": 2,
+      "per_scene_median_mad_mm": [
+        1.5836,
+        6.1459
+      ],
+      "per_scene_median_rms_mm": [
+        1.9463,
+        5.9593
+      ],
+      "median_mad_mm": 3.8647,
+      "median_rms_mm": 3.9528,
+      "per_patch_mad_mm": {
+        "p10": 1.2852,
+        "median": 3.3295,
+        "p90": 12.7866
+      },
+      "real_site_mad_medians_mm": [
+        1.4731,
+        2.7332
+      ],
+      "median_mad_difference_from_real_low_mm": 2.3916,
+      "median_mad_difference_from_real_high_mm": 1.1315
+    }
+  },
+  "auto_update_production_config": false,
+  "calibration_decision": "DIAGNOSTIC_ONLY_NO_UNIQUE_SCANNER_PARAMETER_FIT",
+  "limitations": [
+    "Two real scenes only. Median over densest 24 candidate wall patches, not random building sample.",
+    "Small one-room synthetic scenes cannot match real multiroom incidence, occlusion or number of stations.",
+    "Plane residual combines wall material, geometry, registration, range noise and outliers.",
+    "Changing registration error or roughness may alter return support and patch selection.",
+    "The underlying real E57 files lost original per-station ray provenance.",
+    "All comparisons reuse the exact CAL-02 estimator; no geometry ground truth is used.",
+    "No candidate can establish physical calibration without matched wall patches and multiple seeds."
+  ],
+  "source_github_workflow_run": 43683791128,
+  "source_git_commit": "74060b09a5f678be4c0db6d108b779cc82c59ae3",
+  "per_scene": [
+    {
+      "seed": 42111,
+      "variant": "baseline",
+      "stations": 2,
+      "point_count": 10768508,
+      "reservoir_points": 250000,
+      "patch_count": 16,
+      "median_mad_mm": 5.0155,
+      "median_rms_mm": 5.31
+    },
+    {
+      "seed": 42111,
+      "variant": "low_unevenness",
+      "stations": 2,
+      "point_count": 10768647,
+      "reservoir_points": 250000,
+      "patch_count": 17,
+      "median_mad_mm": 1.5836,
+      "median_rms_mm": 1.9463
+    },
+    {
+      "seed": 42111,
+      "variant": "high_unevenness",
+      "stations": 2,
+      "point_count": 10767926,
+      "reservoir_points": 250000,
+      "patch_count": 15,
+      "median_mad_mm": 7.9148,
+      "median_rms_mm": 7.6836
+    },
+    {
+      "seed": 42111,
+      "variant": "low_registration",
+      "stations": 2,
+      "point_count": 10768508,
+      "reservoir_points": 250000,
+      "patch_count": 16,
+      "median_mad_mm": 4.786,
+      "median_rms_mm": 5.2839
+    },
+    {
+      "seed": 42111,
+      "variant": "high_registration",
+      "stations": 2,
+      "point_count": 10768508,
+      "reservoir_points": 250000,
+      "patch_count": 16,
+      "median_mad_mm": 4.671,
+      "median_rms_mm": 5.241
+    },
+    {
+      "seed": 42112,
+      "variant": "baseline",
+      "stations": 2,
+      "point_count": 10178625,
+      "reservoir_points": 250000,
+      "patch_count": 19,
+      "median_mad_mm": 5.435,
+      "median_rms_mm": 6.2852
+    },
+    {
+      "seed": 42112,
+      "variant": "low_unevenness",
+      "stations": 2,
+      "point_count": 10178907,
+      "reservoir_points": 250000,
+      "patch_count": 19,
+      "median_mad_mm": 6.1459,
+      "median_rms_mm": 5.9593
+    },
+    {
+      "seed": 42112,
+      "variant": "high_unevenness",
+      "stations": 2,
+      "point_count": 10178222,
+      "reservoir_points": 250000,
+      "patch_count": 18,
+      "median_mad_mm": 6.9512,
+      "median_rms_mm": 7.9191
+    },
+    {
+      "seed": 42112,
+      "variant": "low_registration",
+      "stations": 2,
+      "point_count": 10178625,
+      "reservoir_points": 250000,
+      "patch_count": 16,
+      "median_mad_mm": 4.2557,
+      "median_rms_mm": 4.2478
+    },
+    {
+      "seed": 42112,
+      "variant": "high_registration",
+      "stations": 2,
+      "point_count": 10178625,
+      "reservoir_points": 250000,
+      "patch_count": 19,
+      "median_mad_mm": 7.6115,
+      "median_rms_mm": 9.0318
+    }
+  ]
+}
