@@ -1,0 +1,71 @@
+name: CAL-04 multiroom range, incidence and station overlap
+
+on:
+  push:
+    branches: [fix/native-hd-v4]
+    paths:
+      - '.github/workflows/cal04-multiroom-surfaces.yml'
+      - 'tools/calibrate_multiroom_surfaces.py'
+      - 'tools/calibrate_e57_surfaces.py'
+      - 'tools/calibrate_real_synthetic_surfaces.py'
+      - 'tests/test_cal04_multiroom_surfaces.py'
+      - 'configs/calibration_real_e57_surfaces.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  multiroom-correlation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install raycaster and numeric dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgl1 libglib2.0-0 libegl1 libopengl0
+          python -m pip install 'numpy>=1.26,<3' 'scipy>=1.11' 'PyYAML>=6,<7' 'shapely>=2' 'opencv-python-headless>=4.8' 'pye57>=0.4' 'open3d>=0.18,<0.21' 'pytest>=8,<10'
+      - name: Test sampling, matching CAL02 estimator and missing-data guards
+        env:
+          PYTHONPATH: .
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+        run: python -m pytest -q tests/test_e57_surface_calibration.py tests/test_cal03_surface_comparison.py tests/test_cal04_multiroom_surfaces.py
+      - name: Analyze three independent three-room scans at 0.1 degrees
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+          OPEN3D_CPU_RENDERING: 'true'
+        run: |
+          python tools/calibrate_multiroom_surfaces.py --out /tmp/cal04 --seeds 42121 42122 42123 --max-sample 250000
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('/tmp/cal04/cal04_comparison.json')
+          r=json.loads(p.read_text())
+          s=r['synthetic']
+          assert s['attempted_scenes']==3
+          assert all(n>=2 for n in s['rooms_per_scene'])
+          assert all(n>=2 for n in s['stations_per_scene'])
+          assert r['auto_update_production_config'] is False
+          assert r['real_reference']['per_station_range_or_incidence']=='UNAVAILABLE_ORIGINAL_E57_MERGED'
+          assert 'range_sigma_mm' not in r['calibration_decision']
+          print('CAL04: three multroom scenes, no scanner parameter fit')
+          PY
+      - name: Upload only derived aggregated measurements, never xyz or E57
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cal04-multiroom-surface-strata
+          path: |
+            /tmp/cal04/cal04_comparison.json
+            /tmp/cal04/CAL04_REPORT.md
+          if-no-files-found: warn
+          retention-days: 14
