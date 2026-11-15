@@ -16,7 +16,7 @@ def params():
         wall_roughness_tail_probability=0.2,
         wall_roughness_tail_sigma_mm=(8.0, 12.0),
         wall_roughness_tail_corr_m=1.8,
-        wall_roughness_tail_fine_corr_m=0.15,
+        wall_roughness_tail_fine_corr_m=0.35,
     )
     return cfg, sample_params(cfg, np.random.default_rng(46001))
 
@@ -29,7 +29,7 @@ def points():
 def test_fine_scale_never_modifies_zone_mask_or_layout_random_stream():
     base, p = params()
     modified = copy.deepcopy(base)
-    modified.wall_roughness_tail_fine_corr_m = 0.35
+    modified.wall_roughness_tail_fine_corr_m = 0.65
     rng_a, rng_b = np.random.default_rng(123), np.random.default_rng(123)
     a, b = sample_params(base, rng_a), sample_params(modified, rng_b)
     assert rng_a.random() == rng_b.random()
