@@ -1,0 +1,1126 @@
+{
+  "format": "cal05-paused-param-tuning-observations-v1",
+  "source_commit": "28be032295c3fd812ec9e62a2fe20b3330d72fb9",
+  "github_actions_run_id": 43685779601,
+  "github_actions_artifact_id": 14150028092,
+  "artifact_sha256": "f656fd937455662d5d8d4d8b3262518b684aee50250ca5cf939abe9afca8a2b4",
+  "source_report_sha256": "859c310c67f51993d19139af24d42fa3ad3c68facc87dc1f401f28530868747f",
+  "design": {
+    "seeds": [
+      42121,
+      42122,
+      42123,
+      42124
+    ],
+    "factors_one_at_a_time": {
+      "baseline": {},
+      "roughness_low": {
+        "realism.wall_unevenness_mm": [
+          2.0,
+          4.0
+        ]
+      },
+      "roughness_high": {
+        "realism.wall_unevenness_mm": [
+          12.0,
+          20.0
+        ]
+      },
+      "registration_low": {
+        "effects.registration_sigma_mm": [
+          0.5,
+          1.0
+        ]
+      },
+      "registration_high": {
+        "effects.registration_sigma_mm": [
+          7.0,
+          11.0
+        ]
+      },
+      "range_noise_low": {
+        "effects.range_sigma_mm": [
+          0.1,
+          0.2
+        ]
+      },
+      "range_noise_high": {
+        "effects.range_sigma_mm": [
+          1.2,
+          2.0
+        ]
+      }
+    },
+    "fixed_angular_step_deg": 0.1,
+    "same_layout_and_true_station_poses_guarded": true,
+    "same_noisy_returns_and_matched_physical_wall_patches": false
+  },
+  "real": {
+    "site_count": 2,
+    "site_median_mad_mm": [
+      1.4731,
+      2.7332
+    ],
+    "original_ray_station_metadata": "UNAVAILABLE"
+  },
+  "variants": {
+    "baseline": {
+      "attempted_scenes": 4,
+      "valid_paired_scenes": 4,
+      "median_of_scene_mads_mm": 5.6889,
+      "patches_total": 93,
+      "per_scene": [
+        {
+          "seed": 42121,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 3.7184,
+          "median_rms_mm": 3.9397,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42122,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 22,
+          "median_mad_mm": 7.7828,
+          "median_rms_mm": 7.5972,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42123,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 23,
+          "median_mad_mm": 5.1623,
+          "median_rms_mm": 4.6705,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42124,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 6.2155,
+          "median_rms_mm": 6.5182,
+          "layout_station_matched": true
+        }
+      ],
+      "synthetic_only_strata": {
+        "range_groups": {
+          "0–2 m": {
+            "n_patches": 73,
+            "median_observed_plane_mad_mm": 5.5614,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "2–4 m": {
+            "n_patches": 18,
+            "median_observed_plane_mad_mm": 6.5838,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "4–6 m": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 4.5685,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "incidence_groups": {
+          "0–30 deg": {
+            "n_patches": 26,
+            "median_observed_plane_mad_mm": 6.4908,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "30–60 deg": {
+            "n_patches": 51,
+            "median_observed_plane_mad_mm": 5.4207,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "60–75 deg": {
+            "n_patches": 14,
+            "median_observed_plane_mad_mm": 6.869,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "75–90 deg": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 4.1664,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "coverage_groups": {
+          "multi_station": {
+            "n_patches": 29,
+            "median_observed_plane_mad_mm": 6.5,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "single_station": {
+            "n_patches": 63,
+            "median_observed_plane_mad_mm": 5.1623,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "unclassified": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 7.5699,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        }
+      }
+    },
+    "roughness_low": {
+      "attempted_scenes": 4,
+      "valid_paired_scenes": 4,
+      "median_of_scene_mads_mm": 1.7653,
+      "patches_total": 93,
+      "per_scene": [
+        {
+          "seed": 42121,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 1.5086,
+          "median_rms_mm": 1.7788,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42122,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 22,
+          "median_mad_mm": 2.2746,
+          "median_rms_mm": 2.3153,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42123,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 23,
+          "median_mad_mm": 1.6002,
+          "median_rms_mm": 1.532,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42124,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 1.9304,
+          "median_rms_mm": 2.2949,
+          "layout_station_matched": true
+        }
+      ],
+      "synthetic_only_strata": {
+        "range_groups": {
+          "0–2 m": {
+            "n_patches": 70,
+            "median_observed_plane_mad_mm": 1.814,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "2–4 m": {
+            "n_patches": 21,
+            "median_observed_plane_mad_mm": 2.0319,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "4–6 m": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 2.4522,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "incidence_groups": {
+          "0–30 deg": {
+            "n_patches": 25,
+            "median_observed_plane_mad_mm": 2.0951,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "30–60 deg": {
+            "n_patches": 52,
+            "median_observed_plane_mad_mm": 1.7821,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "60–75 deg": {
+            "n_patches": 14,
+            "median_observed_plane_mad_mm": 2.2682,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "75–90 deg": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 1.52,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "coverage_groups": {
+          "multi_station": {
+            "n_patches": 32,
+            "median_observed_plane_mad_mm": 2.1199,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "single_station": {
+            "n_patches": 60,
+            "median_observed_plane_mad_mm": 1.7009,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "unclassified": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 10.7431,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        }
+      }
+    },
+    "roughness_high": {
+      "attempted_scenes": 4,
+      "valid_paired_scenes": 4,
+      "median_of_scene_mads_mm": 8.2228,
+      "patches_total": 95,
+      "per_scene": [
+        {
+          "seed": 42121,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 5.9065,
+          "median_rms_mm": 6.1457,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42122,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 23,
+          "median_mad_mm": 10.1755,
+          "median_rms_mm": 10.0064,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42123,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 7.9573,
+          "median_rms_mm": 7.5344,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42124,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 8.4883,
+          "median_rms_mm": 8.9513,
+          "layout_station_matched": true
+        }
+      ],
+      "synthetic_only_strata": {
+        "range_groups": {
+          "0–2 m": {
+            "n_patches": 70,
+            "median_observed_plane_mad_mm": 8.5145,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "2–4 m": {
+            "n_patches": 23,
+            "median_observed_plane_mad_mm": 7.0411,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "4–6 m": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 2.9062,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "incidence_groups": {
+          "0–30 deg": {
+            "n_patches": 29,
+            "median_observed_plane_mad_mm": 7.0441,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "30–60 deg": {
+            "n_patches": 48,
+            "median_observed_plane_mad_mm": 8.4813,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "60–75 deg": {
+            "n_patches": 16,
+            "median_observed_plane_mad_mm": 9.0428,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "75–90 deg": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 7.2886,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "coverage_groups": {
+          "multi_station": {
+            "n_patches": 31,
+            "median_observed_plane_mad_mm": 8.9044,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "single_station": {
+            "n_patches": 63,
+            "median_observed_plane_mad_mm": 8.0335,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "unclassified": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 8.8707,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        }
+      }
+    },
+    "registration_low": {
+      "attempted_scenes": 4,
+      "valid_paired_scenes": 4,
+      "median_of_scene_mads_mm": 5.2247,
+      "patches_total": 94,
+      "per_scene": [
+        {
+          "seed": 42121,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 3.509,
+          "median_rms_mm": 3.6583,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42122,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 23,
+          "median_mad_mm": 7.5123,
+          "median_rms_mm": 7.2861,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42123,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 23,
+          "median_mad_mm": 4.4876,
+          "median_rms_mm": 4.4349,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42124,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 5.9618,
+          "median_rms_mm": 6.4281,
+          "layout_station_matched": true
+        }
+      ],
+      "synthetic_only_strata": {
+        "range_groups": {
+          "0–2 m": {
+            "n_patches": 72,
+            "median_observed_plane_mad_mm": 5.4973,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "2–4 m": {
+            "n_patches": 20,
+            "median_observed_plane_mad_mm": 5.5643,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "4–6 m": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 2.2704,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "incidence_groups": {
+          "0–30 deg": {
+            "n_patches": 26,
+            "median_observed_plane_mad_mm": 6.3034,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "30–60 deg": {
+            "n_patches": 50,
+            "median_observed_plane_mad_mm": 5.1807,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "60–75 deg": {
+            "n_patches": 16,
+            "median_observed_plane_mad_mm": 6.0555,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "75–90 deg": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 3.8103,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "coverage_groups": {
+          "multi_station": {
+            "n_patches": 31,
+            "median_observed_plane_mad_mm": 5.7221,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "single_station": {
+            "n_patches": 62,
+            "median_observed_plane_mad_mm": 5.2585,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "unclassified": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 6.0889,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        }
+      }
+    },
+    "registration_high": {
+      "attempted_scenes": 4,
+      "valid_paired_scenes": 4,
+      "median_of_scene_mads_mm": 5.9847,
+      "patches_total": 93,
+      "per_scene": [
+        {
+          "seed": 42121,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 3.8531,
+          "median_rms_mm": 4.2019,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42122,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 22,
+          "median_mad_mm": 8.5583,
+          "median_rms_mm": 8.1199,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42123,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 23,
+          "median_mad_mm": 5.631,
+          "median_rms_mm": 5.1762,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42124,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 6.3384,
+          "median_rms_mm": 6.8813,
+          "layout_station_matched": true
+        }
+      ],
+      "synthetic_only_strata": {
+        "range_groups": {
+          "0–2 m": {
+            "n_patches": 71,
+            "median_observed_plane_mad_mm": 5.6639,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "2–4 m": {
+            "n_patches": 20,
+            "median_observed_plane_mad_mm": 8.219,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "4–6 m": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 8.8995,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "incidence_groups": {
+          "0–30 deg": {
+            "n_patches": 26,
+            "median_observed_plane_mad_mm": 7.6194,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "30–60 deg": {
+            "n_patches": 50,
+            "median_observed_plane_mad_mm": 5.6417,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "60–75 deg": {
+            "n_patches": 15,
+            "median_observed_plane_mad_mm": 8.0541,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "75–90 deg": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 4.5399,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "coverage_groups": {
+          "multi_station": {
+            "n_patches": 28,
+            "median_observed_plane_mad_mm": 8.219,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "single_station": {
+            "n_patches": 64,
+            "median_observed_plane_mad_mm": 5.1918,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "unclassified": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 14.1044,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        }
+      }
+    },
+    "range_noise_low": {
+      "attempted_scenes": 4,
+      "valid_paired_scenes": 4,
+      "median_of_scene_mads_mm": 5.6849,
+      "patches_total": 94,
+      "per_scene": [
+        {
+          "seed": 42121,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 3.7058,
+          "median_rms_mm": 3.9199,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42122,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 23,
+          "median_mad_mm": 7.7991,
+          "median_rms_mm": 7.4943,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42123,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 23,
+          "median_mad_mm": 5.1763,
+          "median_rms_mm": 4.766,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42124,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 6.1935,
+          "median_rms_mm": 6.5339,
+          "layout_station_matched": true
+        }
+      ],
+      "synthetic_only_strata": {
+        "range_groups": {
+          "0–2 m": {
+            "n_patches": 72,
+            "median_observed_plane_mad_mm": 5.6629,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "2–4 m": {
+            "n_patches": 20,
+            "median_observed_plane_mad_mm": 6.0119,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "4–6 m": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 4.594,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "incidence_groups": {
+          "0–30 deg": {
+            "n_patches": 26,
+            "median_observed_plane_mad_mm": 6.562,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "30–60 deg": {
+            "n_patches": 50,
+            "median_observed_plane_mad_mm": 5.5063,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "60–75 deg": {
+            "n_patches": 16,
+            "median_observed_plane_mad_mm": 6.6513,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "75–90 deg": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 4.4132,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "coverage_groups": {
+          "multi_station": {
+            "n_patches": 31,
+            "median_observed_plane_mad_mm": 6.4803,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "single_station": {
+            "n_patches": 62,
+            "median_observed_plane_mad_mm": 5.4196,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "unclassified": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 7.3691,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        }
+      }
+    },
+    "range_noise_high": {
+      "attempted_scenes": 4,
+      "valid_paired_scenes": 4,
+      "median_of_scene_mads_mm": 5.8612,
+      "patches_total": 94,
+      "per_scene": [
+        {
+          "seed": 42121,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 4.0161,
+          "median_rms_mm": 4.3224,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42122,
+          "stations": 4,
+          "rooms": 3,
+          "n_patches": 23,
+          "median_mad_mm": 7.8822,
+          "median_rms_mm": 7.7144,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42123,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 23,
+          "median_mad_mm": 5.3968,
+          "median_rms_mm": 5.0247,
+          "layout_station_matched": true
+        },
+        {
+          "seed": 42124,
+          "stations": 5,
+          "rooms": 3,
+          "n_patches": 24,
+          "median_mad_mm": 6.3256,
+          "median_rms_mm": 6.7517,
+          "layout_station_matched": true
+        }
+      ],
+      "synthetic_only_strata": {
+        "range_groups": {
+          "0–2 m": {
+            "n_patches": 72,
+            "median_observed_plane_mad_mm": 5.8026,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "2–4 m": {
+            "n_patches": 20,
+            "median_observed_plane_mad_mm": 6.237,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "4–6 m": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 4.6403,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "incidence_groups": {
+          "0–30 deg": {
+            "n_patches": 27,
+            "median_observed_plane_mad_mm": 6.7439,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "30–60 deg": {
+            "n_patches": 49,
+            "median_observed_plane_mad_mm": 5.6862,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "60–75 deg": {
+            "n_patches": 16,
+            "median_observed_plane_mad_mm": 6.7507,
+            "n_independent_scenes": 3,
+            "minimum_diagnostic_coverage": true
+          },
+          "75–90 deg": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 4.2335,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        },
+        "coverage_groups": {
+          "multi_station": {
+            "n_patches": 31,
+            "median_observed_plane_mad_mm": 6.5082,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "single_station": {
+            "n_patches": 62,
+            "median_observed_plane_mad_mm": 5.6101,
+            "n_independent_scenes": 4,
+            "minimum_diagnostic_coverage": true
+          },
+          "unclassified": {
+            "n_patches": 1,
+            "median_observed_plane_mad_mm": 8.8984,
+            "n_independent_scenes": 1,
+            "minimum_diagnostic_coverage": false
+          }
+        }
+      }
+    }
+  },
+  "paired_effects": {
+    "roughness_low": {
+      "paired_scenes": 4,
+      "pairs": [
+        {
+          "seed": 42121,
+          "baseline_mad_mm": 3.7184,
+          "variant_mad_mm": 1.5086,
+          "delta_mad_mm": -2.2098,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        },
+        {
+          "seed": 42122,
+          "baseline_mad_mm": 7.7828,
+          "variant_mad_mm": 2.2746,
+          "delta_mad_mm": -5.5082,
+          "patches_baseline": 22,
+          "patches_variant": 22
+        },
+        {
+          "seed": 42123,
+          "baseline_mad_mm": 5.1623,
+          "variant_mad_mm": 1.6002,
+          "delta_mad_mm": -3.5621,
+          "patches_baseline": 23,
+          "patches_variant": 23
+        },
+        {
+          "seed": 42124,
+          "baseline_mad_mm": 6.2155,
+          "variant_mad_mm": 1.9304,
+          "delta_mad_mm": -4.2851,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        }
+      ],
+      "median_delta_mad_mm": -3.9236,
+      "positive_delta_count": 0,
+      "negative_delta_count": 4,
+      "adequate_exploratory_paired_scenes": true
+    },
+    "roughness_high": {
+      "paired_scenes": 4,
+      "pairs": [
+        {
+          "seed": 42121,
+          "baseline_mad_mm": 3.7184,
+          "variant_mad_mm": 5.9065,
+          "delta_mad_mm": 2.1881,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        },
+        {
+          "seed": 42122,
+          "baseline_mad_mm": 7.7828,
+          "variant_mad_mm": 10.1755,
+          "delta_mad_mm": 2.3927,
+          "patches_baseline": 22,
+          "patches_variant": 23
+        },
+        {
+          "seed": 42123,
+          "baseline_mad_mm": 5.1623,
+          "variant_mad_mm": 7.9573,
+          "delta_mad_mm": 2.795,
+          "patches_baseline": 23,
+          "patches_variant": 24
+        },
+        {
+          "seed": 42124,
+          "baseline_mad_mm": 6.2155,
+          "variant_mad_mm": 8.4883,
+          "delta_mad_mm": 2.2728,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        }
+      ],
+      "median_delta_mad_mm": 2.3327,
+      "positive_delta_count": 4,
+      "negative_delta_count": 0,
+      "adequate_exploratory_paired_scenes": true
+    },
+    "registration_low": {
+      "paired_scenes": 4,
+      "pairs": [
+        {
+          "seed": 42121,
+          "baseline_mad_mm": 3.7184,
+          "variant_mad_mm": 3.509,
+          "delta_mad_mm": -0.2094,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        },
+        {
+          "seed": 42122,
+          "baseline_mad_mm": 7.7828,
+          "variant_mad_mm": 7.5123,
+          "delta_mad_mm": -0.2705,
+          "patches_baseline": 22,
+          "patches_variant": 23
+        },
+        {
+          "seed": 42123,
+          "baseline_mad_mm": 5.1623,
+          "variant_mad_mm": 4.4876,
+          "delta_mad_mm": -0.6747,
+          "patches_baseline": 23,
+          "patches_variant": 23
+        },
+        {
+          "seed": 42124,
+          "baseline_mad_mm": 6.2155,
+          "variant_mad_mm": 5.9618,
+          "delta_mad_mm": -0.2537,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        }
+      ],
+      "median_delta_mad_mm": -0.2621,
+      "positive_delta_count": 0,
+      "negative_delta_count": 4,
+      "adequate_exploratory_paired_scenes": true
+    },
+    "registration_high": {
+      "paired_scenes": 4,
+      "pairs": [
+        {
+          "seed": 42121,
+          "baseline_mad_mm": 3.7184,
+          "variant_mad_mm": 3.8531,
+          "delta_mad_mm": 0.1347,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        },
+        {
+          "seed": 42122,
+          "baseline_mad_mm": 7.7828,
+          "variant_mad_mm": 8.5583,
+          "delta_mad_mm": 0.7755,
+          "patches_baseline": 22,
+          "patches_variant": 22
+        },
+        {
+          "seed": 42123,
+          "baseline_mad_mm": 5.1623,
+          "variant_mad_mm": 5.631,
+          "delta_mad_mm": 0.4687,
+          "patches_baseline": 23,
+          "patches_variant": 23
+        },
+        {
+          "seed": 42124,
+          "baseline_mad_mm": 6.2155,
+          "variant_mad_mm": 6.3384,
+          "delta_mad_mm": 0.1229,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        }
+      ],
+      "median_delta_mad_mm": 0.3017,
+      "positive_delta_count": 4,
+      "negative_delta_count": 0,
+      "adequate_exploratory_paired_scenes": true
+    },
+    "range_noise_low": {
+      "paired_scenes": 4,
+      "pairs": [
+        {
+          "seed": 42121,
+          "baseline_mad_mm": 3.7184,
+          "variant_mad_mm": 3.7058,
+          "delta_mad_mm": -0.0126,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        },
+        {
+          "seed": 42122,
+          "baseline_mad_mm": 7.7828,
+          "variant_mad_mm": 7.7991,
+          "delta_mad_mm": 0.0163,
+          "patches_baseline": 22,
+          "patches_variant": 23
+        },
+        {
+          "seed": 42123,
+          "baseline_mad_mm": 5.1623,
+          "variant_mad_mm": 5.1763,
+          "delta_mad_mm": 0.014,
+          "patches_baseline": 23,
+          "patches_variant": 23
+        },
+        {
+          "seed": 42124,
+          "baseline_mad_mm": 6.2155,
+          "variant_mad_mm": 6.1935,
+          "delta_mad_mm": -0.022,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        }
+      ],
+      "median_delta_mad_mm": 0.0007,
+      "positive_delta_count": 2,
+      "negative_delta_count": 2,
+      "adequate_exploratory_paired_scenes": true
+    },
+    "range_noise_high": {
+      "paired_scenes": 4,
+      "pairs": [
+        {
+          "seed": 42121,
+          "baseline_mad_mm": 3.7184,
+          "variant_mad_mm": 4.0161,
+          "delta_mad_mm": 0.2977,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        },
+        {
+          "seed": 42122,
+          "baseline_mad_mm": 7.7828,
+          "variant_mad_mm": 7.8822,
+          "delta_mad_mm": 0.0994,
+          "patches_baseline": 22,
+          "patches_variant": 23
+        },
+        {
+          "seed": 42123,
+          "baseline_mad_mm": 5.1623,
+          "variant_mad_mm": 5.3968,
+          "delta_mad_mm": 0.2345,
+          "patches_baseline": 23,
+          "patches_variant": 23
+        },
+        {
+          "seed": 42124,
+          "baseline_mad_mm": 6.2155,
+          "variant_mad_mm": 6.3256,
+          "delta_mad_mm": 0.1101,
+          "patches_baseline": 24,
+          "patches_variant": 24
+        }
+      ],
+      "median_delta_mad_mm": 0.1723,
+      "positive_delta_count": 4,
+      "negative_delta_count": 0,
+      "adequate_exploratory_paired_scenes": true
+    }
+  },
+  "quality_flags": [
+    "CAL05_DOES_NOT_INFER_INTRINSIC_RANGE_OR_REGISTRATION_SIGMA",
+    "FAR_RANGE_AND_GRAZING_STRATA_REQUIRE_INDEPENDENT_REAL_EVIDENCE",
+    "ONLY_TWO_REAL_SITES_WITH_UNKNOWN_ORIGINAL_STATIONS",
+    "PATCH_SELECTION_CAN_DIFFER_ACROSS_PAIRED_VARIANTS"
+  ],
+  "calibration_decision": "NO_AUTO_TUNING_PENDING_INDEPENDENT_HOLDOUT_AND_MORE_REAL_SITES",
+  "auto_update_production_config": false,
+  "limitations": [
+    "One-factor-at-a-time controlled input ranges do not uniquely identify physical scanner components.",
+    "Same true station poses and room geometry are checked; noisy return realization and patch selection may differ.",
+    "Real sites have no original per-return station geometry, incidence or ranging metadata.",
+    "The CAL-02 candidate patches are the highest-support local vertical walls, not a random architectural sample.",
+    "Paired deltas compare per-scene estimates, not exactly corresponding physical patches.",
+    "Only synthetic range/incidence/overlap strata can be computed; they cannot be fitted to real per-ray values.",
+    "No production YAML change or new model training on this experiment alone."
+  ],
+  "recommended_cal06_candidate_not_applied": {
+    "factor": "realism.wall_unevenness_mm",
+    "range_mm": [
+      2,
+      4
+    ],
+    "selection_basis": "observed lower 4-seed synthetic plane MAD, not physical scanner identification",
+    "condition": "compare against unseen seeds and independent real scans before any production update"
+  }
+}
