@@ -98,3 +98,21 @@ def test_e57_scan_header_does_not_assume_physical_station():
     assert r['row_and_column_indices_available'] is False
     assert r['one_data3d_node_is_one_physical_station'] == 'unverified'
     assert not r['pose_rotation_available']
+
+
+def test_real_aggregate_reference_does_not_overclaim_scanner_parameters():
+    import json
+    from pathlib import Path
+    ref = json.loads((Path(__file__).resolve().parents[1] /
+                      'configs/calibration_real_e57_surfaces.json').read_text(encoding='utf8'))
+    assert len(ref['scans']) == 2
+    assert ref['auto_update_scanner_params'] is False
+    assert {x['total_points'] for x in ref['scans']} == {21871717, 36002688}
+    for entry in ref['scans']:
+        assert entry['data3d_nodes'] == 1
+        assert not entry['row_and_column_indices_available']
+        assert entry['actual_station_count'] == 'not_identifiable'
+        assert entry['selected_patches'] == 24
+        assert entry['patch_mad_mm']['q1'] <= entry['patch_mad_mm']['median'] <= entry['patch_mad_mm']['q3']
+        assert 'range_sigma_mm' not in entry
+        assert 'angular_step_deg' not in entry

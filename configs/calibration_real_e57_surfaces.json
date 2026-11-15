@@ -1,0 +1,62 @@
+{
+  "format": "real_e57_local_surface_reference_v1",
+  "purpose": "Measured local vertical-plane residuals in original E57 data3D clouds; not intrinsic range sigma",
+  "github_action_run_id": 43676059810,
+  "source_commit": "7bcbf78c1ec229cd1af564ea96771a4de320efee",
+  "auto_update_scanner_params": false,
+  "scans": [
+    {
+      "source_name": "4012_Mikluhi-Maklaya-3-793.e57",
+      "sha256": "473fe526d139657baa3654ac9cc82681d5e656ee19da5f6d5c57167aa46d9975",
+      "file_bytes": 491343872,
+      "data3d_nodes": 1,
+      "total_points": 21871717,
+      "cartesian_fields_available": true,
+      "row_and_column_indices_available": false,
+      "pose_present": true,
+      "actual_station_count": "not_identifiable",
+      "max_sample_points": 250000,
+      "sampling_fraction": 0.01143,
+      "wall_line_candidates": 5,
+      "selected_patches": 24,
+      "patch_mad_mm": {
+        "p10": 1.117,
+        "q1": 1.2922,
+        "median": 1.4731,
+        "q3": 1.5405,
+        "p90": 1.7205
+      },
+      "patch_rms_mm_median": 1.4584
+    },
+    {
+      "source_name": "Barklaya_14_42.e57",
+      "sha256": "a7f1352a2ae2458f1ca11c33b220f582070ea7b2c3834a32bc53ba6531b4be95",
+      "file_bytes": 749791232,
+      "data3d_nodes": 1,
+      "total_points": 36002688,
+      "cartesian_fields_available": true,
+      "row_and_column_indices_available": false,
+      "pose_present": true,
+      "actual_station_count": "not_identifiable",
+      "max_sample_points": 250000,
+      "sampling_fraction": 0.006944,
+      "wall_line_candidates": 5,
+      "selected_patches": 24,
+      "patch_mad_mm": {
+        "p10": 1.9764,
+        "q1": 2.186,
+        "median": 2.7332,
+        "q3": 4.4691,
+        "p90": 10.0135
+      },
+      "patch_rms_mm_median": 3.0911
+    }
+  ],
+  "notes": [
+    "Two E57 files were SHA256 and size verified in GitHub Actions against the Stage0 reference.",
+    "Each file exposes one data3D node, without row/column indexing or index bounds; station count is not identifiable.",
+    "Patch median is over the 24 highest-occupancy eligible local wall candidates per file (biased sample), not a representative building-wide mean.",
+    "Observed patch plane residual conflates true wall roughness, scan noise and registration. No inference of scanner angular step or sensor noise.",
+    "Raw coordinates and E57 point clouds are excluded from repository."
+  ]
+}

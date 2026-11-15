@@ -51,3 +51,18 @@ Output:
 5. The full source E57s are over the 256-MB connector transfer limit, so this computation runs next to the files in Colab; GitHub CI tests only the numerical estimator using controlled fixtures.
 
 Next decision after real reports: compare **matched local planar patches** from actual and synthetic scan returns using identical estimator settings and known/unknown station provenance. No direct tuning of `customer_like.yaml` before that comparison.
+
+## Measured CAL-02 results, two original E57 files (November 15, 2026)
+
+A GitHub Actions matrix run downloaded both exact originals provided by the user, verified SHA-256 against Stage 0, then processed all 21,871,717 and 36,002,688 raw Cartesian points via bounded streaming, with 250,000 uniformly sampled records per file. All CI jobs succeeded. Only derived metrics were retained.
+
+| File | data3D nodes | rowIndex/columnIndex | Pose | Selected wall patches | Median observed planar MAD | Median RMS | MAD interquartile range |
+|---|---:|---|---|---:|---:|---:|---:|
+| Mikluhi-Maklaya | 1 | absent | available | 24 | 1.47 mm | 1.46 mm | 1.29–1.54 mm |
+| Barklaya | 1 | absent | available | 24 | 2.73 mm | 3.09 mm | 2.19–4.47 mm |
+
+The Barklaya **90th percentile** patch MAD is ~10.01 mm, indicating heterogeneity in these *selected* planar candidates. A larger residual does not prove registration failure. The absence of row/column indices and the possible presence of merged scans mean **the original physical scan stations and per-ray paths are not identifiable from these exports**. Neither dataset provides a basis to estimate a reliable scanner angular step.
+
+Full aggregate reference (with no point coordinates) is in `configs/calibration_real_e57_surfaces.json`; supporting interpretation is in `tools/CAL02_REAL_RESULTS_RU.md`. The verified real E57 analysis is on [GitHub Actions](https://github.com/BykovVadimCV/E57toARCHICAD/actions/runs/43676059810).
+
+**Decision:** Keep `configs/customer_like.yaml` unchanged. To calibrate local surface thickening, compare the same patch estimator on *synthetic measured returns* in matched architectural conditions before editing any noise or registration parameter. Avoid equating observed real planar roughness with device `range_sigma_mm`.
