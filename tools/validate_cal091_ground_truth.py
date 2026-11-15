@@ -222,13 +222,27 @@ def run(out, config=Path('configs/customer_like.yaml'), seeds=SEEDS,
     out.mkdir(parents=True, exist_ok=True)
     config_hash = hashlib.sha256(Path(config).read_bytes()).hexdigest()
     rows = []
+    cache = out / '_completed_rows'
+    cache.mkdir(parents=True, exist_ok=True)
     for seed in seeds:
         for resolution in resolutions:
             for variant in VARIANTS:
-                print(f'CAL091 seed={seed} tessellation={resolution:.2f} variant={variant}', flush=True)
                 save = (save_truth == 'all' or (save_truth == 'one' and seed == seeds[0] and resolution == min(resolutions)))
                 target = out / 'mesh_truth' / f'{seed}_{variant}_{resolution:.2f}.npz' if save else None
-                rows.append(one_scene(config, seed, variant, resolution, save_npz=target))
+                cached = cache / f'{seed}_{variant}_{resolution:.2f}.json'
+                if cached.exists() and (target is None or target.exists()):
+                    saved = json.loads(cached.read_text(encoding='utf-8'))
+                    if saved.get('config_sha256') == config_hash and saved.get('format') == FORMAT:
+                        print(f'CAL091 resume cached seed={seed} resolution={resolution} variant={variant}', flush=True)
+                        rows.append(saved['row'])
+                        continue
+                print(f'CAL091 seed={seed} tessellation={resolution:.2f} variant={variant}', flush=True)
+                row = one_scene(config, seed, variant, resolution, save_npz=target)
+                rows.append(row)
+                tmp = cached.with_suffix('.tmp')
+                tmp.write_text(json.dumps({'format': FORMAT, 'config_sha256': config_hash,
+                                           'row': row}, allow_nan=False), encoding='utf-8')
+                tmp.replace(cached)
         (out / 'cal091_progress.json').write_text(json.dumps({
             'format': FORMAT, 'completed_seeds': len({r['seed'] for r in rows}),
             'expected_seeds': len(seeds), 'completed_meshes': len(rows),
