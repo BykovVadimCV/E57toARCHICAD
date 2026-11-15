@@ -259,23 +259,13 @@ def _vertical_overlap(a, b):
     return min(a["z_max_m"], b["z_max_m"]) - max(a["z_min_m"], b["z_min_m"])
 
 
-def _point_segment_projection(point, start, end):
-    point, start, end = (np.asarray(v, float) for v in (point, start, end))
-    direction = end - start
-    norm2 = float(direction @ direction)
-    if norm2 <= 1e-12:
-        return float(np.linalg.norm(point - start)), start
-    t = float(np.clip((point - start) @ direction / norm2, 0., 1.))
-    projected = start + t * direction
-    return float(np.linalg.norm(point - projected)), projected
-
-
-def _endpoint_to_segment(a, b):
-    """Minimum distance from either finite endpoint of A to finite segment B."""
-    ae = np.asarray(a["endpoints_xy"], float)
-    be = np.asarray(b["endpoints_xy"], float)
-    choices = [_point_segment_projection(p, be[0], be[1]) for p in ae]
-    return min(choices, key=lambda x: x[0])
+def _line_intersection(a, b):
+    na = np.asarray(a["normal_xy"], float)
+    nb = np.asarray(b["normal_xy"], float)
+    matrix = np.vstack((na, nb))
+    if abs(float(np.linalg.det(matrix))) < 1e-8:
+        return None
+    return np.linalg.solve(matrix, -np.array([a["plane_bias"], b["plane_bias"]]))
 
 
 def infer_topology(segments, cfg=None):
@@ -331,8 +321,17 @@ def infer_topology(segments, cfg=None):
                 continue
             if dot > sin_perp:
                 continue
-            da, projection_b = _endpoint_to_segment(a, b)
-            db, projection_a = _endpoint_to_segment(b, a)
+            intersection = _line_intersection(a, b)
+            if intersection is None:
+                continue
+            sa = float(intersection @ ta)
+            sb = float(intersection @ tb)
+            da = min(abs(sa - a["s_min_m"]), abs(sa - a["s_max_m"]))
+            db = min(abs(sb - b["s_min_m"]), abs(sb - b["s_max_m"]))
+            inside_a = a["s_min_m"] - tol <= sa <= a["s_max_m"] + tol
+            inside_b = b["s_min_m"] - tol <= sb <= b["s_max_m"] + tol
+            if not (inside_a and inside_b):
+                continue
             end_a, end_b = da <= tol, db <= tol
             if end_a and end_b:
                 relation = "corner"
@@ -340,11 +339,10 @@ def infer_topology(segments, cfg=None):
                 relation = "tee"
             else:
                 continue
-            junction = (projection_a + projection_b) / 2
             edges.append({
                 "a": int(a["id"]), "b": int(b["id"]),
                 "type": relation,
-                "junction_xy": junction.tolist(),
+                "junction_xy": intersection.tolist(),
                 "endpoint_distance_a_m": float(da),
                 "endpoint_distance_b_m": float(db),
                 "vertical_overlap_m": float(overlap_z),
