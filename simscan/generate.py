@@ -77,9 +77,12 @@ def choose_scan_config(cfg, rng):
 
 def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: int = 0,
                    write_scan: bool = True, training_only: bool = False,
-                   capture_ray_evidence: bool = False) -> dict:
+                   capture_ray_evidence: bool = False,
+                   capture_truth_hits: bool = False) -> dict:
     """write_scan=False - scan.e57 и метки точек не пишутся, сканы с записанными позами
     возвращаются в summary["_scans"] = (scans, poses) (make-dataset растеризует их из памяти)."""
+    if capture_truth_hits and write_scan:
+        raise ValueError("CAL-09.2 provenance is in-memory only; use write_scan=False")
     t_start = time.perf_counter()
     rng = scene_rng(seed, index)
     out = Path(out_dir)
@@ -123,8 +126,11 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
             level_of.append(1)
         grids.update({k + 1000: g for k, g in grids_up.items()})
         mesh, solids, _ = build_duplex_scene(layout, up, dz, real, upper_realism(real, rng))
+        if capture_truth_hits:
+            raise ValueError("CAL-09.2 physical ray provenance currently requires a single-floor scene")
     else:
         mesh, solids = build_scene(layout, realism.tessellation(real))
+        truth_pre_vertices = mesh.vertices.copy() if capture_truth_hits else None
         realism.apply_to_mesh(mesh, real)
     if not stations:
         raise RuntimeError("не удалось поставить ни одной станции")
@@ -142,6 +148,7 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
     params = sample_effect_params(cfg.effects, rng)
     scan_cfg = choose_scan_config(cfg.scanner, rng)
     sim = ScanSimulator(mesh, scan_cfg, cfg.effects, params, rng)
+    sim.keep_truth_hits = capture_truth_hits
 
     scans, poses, station_info = [], [], []
     for k, st in enumerate(stations):
@@ -260,6 +267,17 @@ def generate_scene(cfg: SynthConfig, out_dir: str | Path, seed: int = 0, index: 
         'scene_build_s':round(t_mesh-t_layout,3),'scan_s':round(t_scanned-t_mesh,3),
         'export_s':round(time.perf_counter()-t_scanned,3)}
     summary["seconds"] = round(time.perf_counter() - t_start, 2)
+    if capture_truth_hits:
+        # Experimental ground-truth metadata, excluded from serialized layout,
+        # E57 and all default generation paths.
+        summary["_truth_mesh"] = {
+            "vertices_pre": truth_pre_vertices,
+            "vertices_post": mesh.vertices,
+            "triangles": mesh.triangles,
+            "tri_instance": mesh.tri_instance,
+            "tri_label": mesh.tri_label,
+            "realism": real,
+        }
     if capture_ray_evidence:
         from .ray_evidence import capture_direct_returns
         summary["_ray_samples"] = capture_direct_returns(scans, poses)

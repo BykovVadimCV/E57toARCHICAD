@@ -59,6 +59,9 @@ class ScanResult:
     mixed: np.ndarray          # (N,) bool - смешанный пиксель
     diag: dict | None = None   # отладка: истинная дальность, угол падения, кромки, энергия
     straight_valid: np.ndarray | None = None  # measured hit with unambiguous direct path
+    # CAL-09.2 opt-in, never exported as E57 labels. -1/NaN for non-direct rays.
+    primitive_id: np.ndarray | None = None
+    true_range_m: np.ndarray | None = None
 
     @property
     def n_valid(self) -> int:
@@ -189,6 +192,7 @@ class ScanSimulator:
         self.dirs, self.rows, self.cols, self.nrow, self.ncol = ray_grid(scfg)
         self._static_scene = mesh.to_raycasting_scene()
         self.keep_diag = False
+        self.keep_truth_hits = False  # CAL-09.2 experimental physical provenance
 
     # ------------------------------------------------------------------
     def _cast(self, scene, origins: np.ndarray, dirs: np.ndarray):
@@ -349,10 +353,15 @@ class ScanSimulator:
         if self.keep_diag:
             diag = {"t_true": t_true.astype(np.float32), "cos_inc": cos_inc.astype(np.float32),
                     "edge": edge, "frac": frac.astype(np.float32), "sigma": sig.astype(np.float32)}
+        straight = hit & ~via_special & ~mixed & ~edge
+        primitive_id = (np.where(straight, prim, -1).astype(np.int32)
+                        if self.keep_truth_hits else None)
+        true_range_m = (np.where(straight, t_true, np.nan).astype(np.float32)
+                        if self.keep_truth_hits else None)
         return ScanResult(station.id, self.nrow, self.ncol, xyz, hit, self.rows, self.cols,
                           np.clip(intensity, 0, 1).astype(np.float32), label, inst,
-                          virtual & hit, mixed & hit, diag,
-                          hit & ~via_special & ~mixed & ~edge)
+                          virtual & hit, mixed & hit, diag, straight,
+                          primitive_id, true_range_m)
 
     # --- модель пятна луча ---------------------------------------------------
     def _edges(self, t, hit, inst) -> np.ndarray:
