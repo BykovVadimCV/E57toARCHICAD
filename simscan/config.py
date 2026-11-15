@@ -147,6 +147,9 @@ class RealismConfig:
     wall_roughness_tail_sigma_mm: Range = (8.0, 12.0)
     wall_roughness_tail_corr_m: float = 0.8
     wall_roughness_tail_transition_sigma: float = 0.15
+    # CAL-09: >0 separates fine defect texture from the coarse spatial envelope.
+    # Zero keeps CAL-07/08 bit-for-bit legacy displacement behaviour.
+    wall_roughness_tail_fine_corr_m: float = 0.0
 
 
 @dataclass

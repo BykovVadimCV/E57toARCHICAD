@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 from statistics import NormalDist
 
 import numpy as np
@@ -39,6 +40,8 @@ def sample_params(cfg: RealismConfig, rng: np.random.Generator) -> dict:
         raise ValueError("wall_roughness_tail_sigma_mm must be a positive ordered range")
     if cfg.wall_roughness_tail_corr_m <= 0 or cfg.wall_roughness_tail_transition_sigma <= 0:
         raise ValueError("roughness tail correlation and transition must be positive")
+    if not math.isfinite(cfg.wall_roughness_tail_fine_corr_m) or cfg.wall_roughness_tail_fine_corr_m < 0:
+        raise ValueError("wall_roughness_tail_fine_corr_m must be finite and >= 0")
     if probability > 0 and tail_lo < base_hi:
         raise ValueError("roughness tail sigma must be >= the maximum base wall unevenness")
     shear = math.radians(float(rng.normal(0, cfg.shear_deg_sigma)))
@@ -59,6 +62,7 @@ def sample_params(cfg: RealismConfig, rng: np.random.Generator) -> dict:
         "roughness_tail_probability": probability,
         "roughness_tail_sigma_m": tail_sigma_mm / 1000,
         "roughness_tail_corr_m": float(cfg.wall_roughness_tail_corr_m),
+        "roughness_tail_fine_corr_m": float(cfg.wall_roughness_tail_fine_corr_m),
         "roughness_tail_transition_sigma": float(cfg.wall_roughness_tail_transition_sigma),
         "corr_m": corr,
         "lean_per_m": u(cfg.lean_mm_per_m) / 1000,
@@ -109,6 +113,26 @@ def roughness_tail_envelope(p: np.ndarray, params: dict) -> np.ndarray:
     return u * u * (3.0 - 2.0 * u)
 
 
+def fine_defect_field(p: np.ndarray, params: dict) -> np.ndarray:
+    """Independent deterministic RFF texture for the CAL-09 defect interior.
+
+    Derive a private seed from the existing surface basis, not the layout RNG.
+    Changing the fine correlation length changes only texture frequencies;
+    the realization, large-zone envelope and scanner stations stay paired.
+    """
+    corr = float(params.get("roughness_tail_fine_corr_m", 0.0))
+    if not np.isfinite(corr) or corr <= 0:
+        raise ValueError("CAL-09 fine correlation length must be positive")
+    key = np.asarray(params["w"], dtype="<f8").tobytes()
+    seed = int.from_bytes(hashlib.sha256(b"cal09-fine-wall-v1" + key).digest()[:8], "little")
+    rng = np.random.default_rng(seed)
+    k = 32
+    freq = rng.normal(0.0, 1.0 / corr, (2, k, 3))
+    phases = rng.uniform(0.0, 2 * math.pi, (2, k))
+    return np.stack([math.sqrt(2.0 / k) * np.cos(p @ freq[a].T + phases[a]).sum(1)
+                     for a in range(2)], axis=1)
+
+
 def displacement(p: np.ndarray, params: dict) -> np.ndarray:
     """Поле неровности; CAL-07 плавно усиливает XY-смещение в редких 3-D зонах."""
     w = np.asarray(params["w"])                  # (3, k, 3)
@@ -117,14 +141,20 @@ def displacement(p: np.ndarray, params: dict) -> np.ndarray:
     base_sigma = float(params["unevenness_m"])
     envelope = roughness_tail_envelope(p, params)
     tail_sigma = float(params.get("roughness_tail_sigma_m", base_sigma))
+    fine_corr = float(params.get("roughness_tail_fine_corr_m", 0.0))
+    if not np.isfinite(fine_corr) or fine_corr < 0:
+        raise ValueError("roughness_tail_fine_corr_m must be finite and >= 0")
     local_sigma = base_sigma + envelope * (tail_sigma - base_sigma)
     d = np.empty_like(p)
     for axis in range(3):
         arg = p @ w[axis].T + phi[axis]          # (n, k)
         # Wall-normal displacement is horizontal; retain the calibrated base
         # vertical component so the floor/ceiling datum is not globally inflated.
-        sigma = local_sigma if axis < 2 else base_sigma
+        sigma = (local_sigma if axis < 2 and fine_corr == 0 else base_sigma)
         d[:, axis] = sigma * math.sqrt(2.0 / k) * np.cos(arg).sum(1)
+    if fine_corr > 0 and np.any(envelope):
+        # Only add a local high-frequency component: never rescale global noise.
+        d[:, :2] += (envelope * (tail_sigma - base_sigma))[:, None] * fine_defect_field(p, params)
     wl = np.asarray(params["w_lean"])            # (2, 8, 2)
     pl = np.asarray(params["phi_lean"])
     for axis in range(2):
