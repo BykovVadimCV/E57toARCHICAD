@@ -31,8 +31,8 @@ baseline:
 5. Keep wall candidates only when fixed support, length, height, density,
    occupancy and plane-residual gates pass.
 6. Infer graph edges from segment geometry alone:
-   - corner: endpoints of both perpendicular segments project within the fixed junction tolerance;
-   - tee: one segment end projects onto the interior of a perpendicular segment;
+   - corner: both finite segments reach the same perpendicular line intersection within the fixed junction tolerance;
+   - tee: one segment end reaches the interior of a perpendicular segment at their line intersection;
    - collinear_gap: parallel, near-coincident segments separated by at most
      250mm with sufficient shared height.
 7. Report parallel offset faces separately as ambiguous parallel_face_candidate
