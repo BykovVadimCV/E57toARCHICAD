@@ -54,6 +54,7 @@ def evidence_metrics(counts: np.ndarray, frame: dict, evidence: dict, label: str
         "pixel_m": px, "frame_area_m2": round(grid_area, 6),
         "pixel_count": height * width, "structural_returns": n_returns,
         "occupied_2mm_cells": n_occupied,
+        "returns_per_occupied_2mm_cell": round(n_returns / max(n_occupied, 1), 3),
         "structural_returns_per_frame_m2": round(n_returns / grid_area, 3),
         "occupied_2mm_cells_per_frame_m2": round(n_occupied / grid_area, 3),
         "occupied_2mm_fraction": round(n_occupied / (height * width), 7),
@@ -118,11 +119,12 @@ def from_synthetic_roots(paths: list[Path]) -> list[dict]:
 
 def distribution(rows: list[dict]) -> dict:
     """Use unthinned scenes only, and report number of levels for context."""
-    rows = [r for r in rows if r["synthetic_thinning"] == 0.0]
+    rows = [r for r in rows if float(r.get("synthetic_thinning", 0.0)) == 0.0]
     if not rows:
         raise ValueError("No unthinned evidence available")
     fields = ("structural_returns_per_frame_m2", "occupied_2mm_cells_per_frame_m2",
-              "occupied_20mm_fraction", "multi_return_fraction_among_occupied_2mm")
+              "occupied_20mm_fraction", "multi_return_fraction_among_occupied_2mm",
+              "returns_per_occupied_2mm_cell")
     return {"n_levels": len(rows),
             "metrics": {k: {"median": round(float(statistics.median(r[k] for r in rows)), 6),
                             "min": round(float(min(r[k] for r in rows)), 6),
@@ -145,7 +147,7 @@ def compare(real: list[dict], candidates: list[dict]) -> dict:
            ]}
     groups = {}
     for r in candidates:
-        if r["synthetic_thinning"] != 0.0:
+        if float(r.get("synthetic_thinning", 0.0)) != 0.0:
             continue
         groups.setdefault(r.get("source_root", "synthetic"), []).append(r)
     if not groups:
@@ -156,8 +158,13 @@ def compare(real: list[dict], candidates: list[dict]) -> dict:
         for key, val in x["metrics"].items():
             target = rb["metrics"][key]["median"]
             ratios[key] = round(val["median"] / max(target, 1e-12), 5)
+        within_30pct = all(0.7 <= ratios[key] <= 1.3 for key in
+                         ("structural_returns_per_frame_m2", "occupied_2mm_cells_per_frame_m2"))
         out["candidates"][name] = {"density": x, "synthetic_over_real": ratios,
+                                     "two_primary_metrics_within_30pct": within_30pct,
                                      "station_counts": sorted({r.get("station_count") for r in rows})}
+    out["any_angle_matches_both_primary_density_metrics"] = any(
+        c["two_primary_metrics_within_30pct"] for c in out["candidates"].values())
     return out
 
 
@@ -165,15 +172,20 @@ def make_report(report: dict) -> str:
     lines = ["# Калибровка плотности 2-мм HD-признаков", "",
              "Измерено по *фактическим лазерным отражениям*, не по предсказаниям модели.",
              f"Реальные уровни: {report['real_levels']}. Синтетические: {report['synthetic_levels']}.", "",
-             "| Группа | Структурные отражения/м² кадра | Занятые ячейки 2 мм/м² | Занято ячеек 20 мм |",
-             "|---|---:|---:|---:|"]
+             "| Группа | Отражения/м² кадра | Занятые 2-мм ячейки/м² | Отражения на занятую ячейку | Занято ячеек 20 мм |",
+             "|---|---:|---:|---:|---:|"]
     def row(name, x):
         m = x['metrics']; return (f"| {name} | {m['structural_returns_per_frame_m2']['median']:,.0f} | "
             f"{m['occupied_2mm_cells_per_frame_m2']['median']:,.0f} | "
+            f"{m['returns_per_occupied_2mm_cell']['median']:.1f} | "
             f"{100*m['occupied_20mm_fraction']['median']:.2f}% |")
     lines.append(row("Реальные E57", report["real"]))
     for name, item in report["candidates"].items():
         lines.append(row(name, item["density"]))
+    if not report.get("any_angle_matches_both_primary_density_metrics"):
+        lines.extend(["", "**Ни один кандидат не приблизился одновременно к обеим основным наблюдаемым метрикам",
+                      "в пределах диагностического допуска ±30%. Значит, изменение только углового шага",
+                      "не является обоснованной калибровкой этого эксперимента.**", ""])
     lines.extend(["", "## Ограничения интерпретации", ""])
     lines.extend(f"- {x}" for x in report["limitations"])
     lines.extend(["", "Вывод о выборе конкретного углового шага нельзя делать только по этой таблице.",

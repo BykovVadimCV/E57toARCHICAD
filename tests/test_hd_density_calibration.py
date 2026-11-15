@@ -53,3 +53,26 @@ def test_merged_scan_does_not_identify_angular_step():
     report = compare([a], [a])
     assert any("NOT per-station angular" in x for x in report["limitations"])
     assert "angular_step_deg" not in report
+
+
+def test_real_references_without_synthetic_thinning_are_accepted():
+    reference = _dummy(np.ones((10, 10), dtype=np.uint32), kind="real")
+    del reference["synthetic_thinning"]
+    candidate = _dummy(np.ones((10, 10), dtype=np.uint32))
+    assert compare([reference], [candidate])["real"]["n_levels"] == 1
+
+
+def test_repository_real_reference_is_loadable_and_has_all_metrics():
+    from pathlib import Path
+    import json
+    file = Path(__file__).parents[1] / "configs" / "calibration_real_e57_observed.json"
+    levels = json.loads(file.read_text(encoding="utf-8"))["levels"]
+    assert len(levels) == 3
+    assert distribution(levels)["metrics"]["occupied_20mm_fraction"]["median"] > 0
+
+
+def test_angular_only_calibration_gate_requires_both_metrics():
+    base = _dummy(np.ones((10, 10), dtype=np.uint32))
+    candidate = _dummy(np.full((10, 10), 5, dtype=np.uint32))
+    result = compare([base], [candidate])
+    assert result["any_angle_matches_both_primary_density_metrics"] is False
