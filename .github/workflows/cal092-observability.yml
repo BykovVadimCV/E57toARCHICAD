@@ -8,6 +8,7 @@ on:
       - 'simscan/generate.py'
       - 'tools/cal092_ray_observability.py'
       - 'tools/validate_cal092_observability.py'
+      - 'tools/aggregate_cal092.py'
       - 'tests/test_cal092_observability.py'
       - '.github/workflows/cal092-observability.yml'
   pull_request:
@@ -16,6 +17,7 @@ on:
       - 'simscan/generate.py'
       - 'tools/cal092_ray_observability.py'
       - 'tools/validate_cal092_observability.py'
+      - 'tools/aggregate_cal092.py'
       - 'tests/test_cal092_observability.py'
       - '.github/workflows/cal092-observability.yml'
   workflow_dispatch:
@@ -95,3 +97,79 @@ jobs:
             /tmp/cal092_ci/cal092_progress.json
           retention-days: 14
           if-no-files-found: warn
+
+  cal092-full-seed:
+    needs: cal092-provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        seed: [46101, 46102, 46103, 46104, 46105, 46106, 46107, 46108]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install scanner and analysis dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgl1 libglib2.0-0 libegl1 libopengl0
+          python -m pip install 'numpy>=1.26,<3' 'scipy>=1.11' 'PyYAML>=6,<7' 'shapely>=2' 'opencv-python-headless>=4.8' 'pye57>=0.4' 'open3d>=0.18,<0.21' 'pytest>=8,<10'
+      - name: Full resolution 0.1-degree paired raycast for six cases
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+          OPEN3D_CPU_RENDERING: 'true'
+        run: |
+          python -u tools/validate_cal092_observability.py \
+            --out /tmp/cal092_seed_${{ matrix.seed }} \
+            --seeds ${{ matrix.seed }} \
+            --max-sample 180000 \
+            --angular-step-deg 0.10
+      - name: Upload per-seed aggregates for merged analysis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cal092-seed-${{ matrix.seed }}
+          path: |
+            /tmp/cal092_seed_${{ matrix.seed }}/cal092_results.json
+            /tmp/cal092_seed_${{ matrix.seed }}/CAL092_REPORT.md
+            /tmp/cal092_seed_${{ matrix.seed }}/cal092_progress.json
+          retention-days: 30
+          if-no-files-found: warn
+
+  cal092-aggregate:
+    needs: cal092-full-seed
+    if: ${{ needs.cal092-full-seed.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install aggregation dependencies
+        run: python -m pip install 'numpy>=1.26,<3' 'scipy>=1.11' 'PyYAML>=6,<7'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cal092-seed-*
+          path: /tmp/cal092_shards
+      - name: Aggregate exactly 48 independently paired scans
+        env:
+          PYTHONPATH: .:tools
+        run: |
+          python tools/aggregate_cal092.py --out /tmp/cal092_final \
+            /tmp/cal092_shards/cal092-seed-*/cal092_results.json
+      - name: Upload canonical CAL-09.2 conclusions
+        uses: actions/upload-artifact@v4
+        with:
+          name: cal092-canonical-48-scan-results
+          path: |
+            /tmp/cal092_final/cal092_results.json
+            /tmp/cal092_final/CAL092_REPORT.md
+          retention-days: 30
+          if-no-files-found: error
