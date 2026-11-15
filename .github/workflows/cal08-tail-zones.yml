@@ -1,0 +1,71 @@
+name: CAL-08 spatial tail zone correlation holdout
+
+on:
+  push:
+    branches: [fix/native-hd-v4]
+    paths:
+      - 'tools/validate_cal08_tail_zones.py'
+      - 'tests/test_cal08_tail_zones.py'
+      - 'tools/CAL08_TAIL_ZONE_LENGTH.md'
+      - '.github/workflows/cal08-tail-zones.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tail-zone-length:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Open3D and calibration dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgl1 libglib2.0-0 libegl1 libopengl0
+          python -m pip install 'numpy>=1.26,<3' 'scipy>=1.11' 'PyYAML>=6,<7' 'shapely>=2' 'opencv-python-headless>=4.8' 'pye57>=0.4' 'open3d>=0.18,<0.21' 'pytest>=8,<10'
+      - name: Verify CAL-08 preregistration and prior calibration checks
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+        run: |
+          python -m pytest -q tests/test_cal08_tail_zones.py tests/test_cal07_spatial_tail.py tests/test_cal06_holdout.py tests/test_cal05_paired_factorials.py
+      - name: Run 32 new paired synthetic scans at 0.1 degrees
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+          OPEN3D_CPU_RENDERING: 'true'
+        run: |
+          python tools/validate_cal08_tail_zones.py --out /tmp/cal08 \
+            --seeds 45101 45102 45103 45104 45105 45106 45107 45108 --max-sample 250000
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          r = json.loads(Path('/tmp/cal08/cal08_results.json').read_text(encoding='utf8'))
+          assert r['format'] == 'cal08-spatial-tail-length-holdout-v1'
+          assert len(r['design']['seeds']) == 8
+          assert len(r['variants']) == 4
+          assert all(len(v['paired_scenes']) == 8 for v in r['variants'].values())
+          assert r['auto_update_production_config'] is False
+          assert set(r['design']['seeds']).isdisjoint(r['design']['excluded_previous_seeds'])
+          print('CAL08: ', r['decision'])
+          print('Correlation-length gates: ', {k:v['gates'] for k,v in r['variants'].items() if k.startswith('tail20_corr1') or k.startswith('tail20_corr3')})
+          PY
+      - name: Publish aggregate-only diagnostics (no E57 or XYZ)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cal08-tail-zone-length-diagnostics
+          path: |
+            /tmp/cal08/cal08_results.json
+            /tmp/cal08/CAL08_REPORT.md
+            /tmp/cal08/cal08_partial_progress.json
+          if-no-files-found: warn
+          retention-days: 14
