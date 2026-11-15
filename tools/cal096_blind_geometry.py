@@ -39,7 +39,7 @@ DEFAULTS = {
     "perpendicular_angle_deg": 10.0,
     "collinear_offset_m": 0.08,
     "collinear_gap_m": 0.25,
-    "junction_tolerance_m": 0.15,
+    "junction_tolerance_m": 0.20,
     "min_vertical_overlap_m": 1.60,
     "parallel_face_min_offset_m": 0.06,
     "parallel_face_max_offset_m": 0.35,
@@ -56,7 +56,10 @@ def _unit(v):
 
 def _canonical_normal(n):
     n = _unit(n)
-    if n[0] < -1e-12 or (abs(n[0]) <= 1e-12 and n[1] < 0):
+    # Choose the sign from the dominant axis. Using nx alone is unstable for
+    # nearly axis-aligned Y-normal planes, where tiny noise flips the tangent.
+    dominant = int(np.argmax(np.abs(n)))
+    if n[dominant] < 0:
         n = -n
     return n
 
