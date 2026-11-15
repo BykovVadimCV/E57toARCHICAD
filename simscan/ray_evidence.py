@@ -22,6 +22,10 @@ RAY_BANDS = ('ray_free_low_hd.png', 'ray_free_mid_hd.png', 'ray_free_high_hd.png
 MAX_DIRECT_RAYS_PER_STATION = 12_000
 ENDPOINT_GUARD_M = 0.08
 ORIGIN_GUARD_M = 0.03
+MAX_PASSAGE_STRIPS = 3
+MAX_PASSAGE_PROOF_FRACTION = 0.20
+MAX_PASSAGE_STRIP_HALF_WIDTH_M = 0.012
+
 
 
 @dataclass(frozen=True)
@@ -261,22 +265,67 @@ def audit_passage_crossings(gt, rays: RaySamples | None, frame: dict,
         confirmed = bool(jambs.get(int(op.id), False)
                          and count >= min_crossings
                          and spatial_bins >= min_crossings)
+        # Require localized, measured cross-sections, not all 20mm-quantized
+        # rays. Nearby strips previously joined into a near-full GT aperture.
+        # Select at most three separated physical ray positions for each
+        # passage and cap *raster area*, not merely nominal strip widths.
+        confirmed_pixels = 0
+        domain_pixels = 0
+        selected_offsets = []
+        if confirmed:
+            from .netinput import _fill
+            domain = np.zeros_like(mask)
+            full_poly = gt.wall_quad(wall, op.s-op.width/2, op.s+op.width/2,
+                                     -wall.thickness/2-.01, wall.thickness/2+.01)
+            _fill(domain, full_poly, frame, 255)
+            domain = (domain != 0) & (openings_raster == HD_OPENING_VALUES['passage'])
+            domain_pixels = int(np.count_nonzero(domain))
+            unique_positions = np.unique(np.round(good_s / .02).astype(np.int32)) * .02
+            # Keep extreme beams first to avoid clustering around the center;
+            # an optional third beam may be chosen only if spatially distinct.
+            if unique_positions.size >= 2:
+                selected_offsets = [float(unique_positions[0]), float(unique_positions[-1])]
+                centre_position = float(unique_positions[len(unique_positions)//2])
+                if (len(unique_positions) > 2
+                        and min(abs(centre_position-p) for p in selected_offsets) >= .06):
+                    selected_offsets.append(centre_position)
+            # A strip is only meaningful when supported by measured rays.
+            # This width bound includes the physical pixel scale to allow
+            # subcentimeter apertures to be represented without guessing.
+            half = min(MAX_PASSAGE_STRIP_HALF_WIDTH_M,
+                       .35 * op.width / max(1, 2*len(selected_offsets)))
+            proof = None
+            for attempt in range(5):
+                candidate = np.zeros_like(mask)
+                for s_offset in selected_offsets:
+                    ss = float(op.s + s_offset)
+                    poly = gt.wall_quad(wall, max(op.s-op.width/2, ss-half),
+                                        min(op.s+op.width/2, ss+half),
+                                        -wall.thickness/2-.01, wall.thickness/2+.01)
+                    _fill(candidate, poly, frame, 255)
+                candidate = (candidate != 0) & domain
+                candidate_pixels = int(np.count_nonzero(candidate))
+                if (domain_pixels > 0 and candidate_pixels > 0
+                        and candidate_pixels <= MAX_PASSAGE_PROOF_FRACTION*domain_pixels):
+                    proof = candidate
+                    confirmed_pixels = candidate_pixels
+                    break
+                half *= .5
+            # If no sufficiently narrow measured strips fit, do not mark the
+            # full region valid. A validated crossing remains in the audit.
+            if proof is None:
+                confirmed = False
+            else:
+                mask[proof] = 255
         out.append({'opening_id': int(op.id), 'crossing_direct_ray_samples': count,
                     'distinct_crossing_bins': spatial_bins,
                     'both_jambs_near_returns': bool(jambs.get(int(op.id), False)),
+                    'representative_ray_offsets_m': selected_offsets,
+                    'physical_area_px': domain_pixels,
+                    'confirmed_area_px': confirmed_pixels,
+                    'confirmed_area_fraction': (round(confirmed_pixels/domain_pixels, 6)
+                                                 if domain_pixels else 0.),
+                    'max_area_fraction': MAX_PASSAGE_PROOF_FRACTION,
                     'confirmed_for_supervision': confirmed})
-        if confirmed:
-            # Small strips around independently traversed cross-sections,
-            # NOT the entire GT passage footprint. The rest remains unknown.
-            from .netinput import _fill
-            passage = np.zeros_like(mask)
-            for s_offset in np.unique(np.round(good_s / .02).astype(int)) * .02:
-                centre_s = float(op.s + s_offset)
-                half = .03
-                poly = gt.wall_quad(wall, max(op.s-op.width/2, centre_s-half),
-                                    min(op.s+op.width/2, centre_s+half),
-                                    -wall.thickness/2-.01, wall.thickness/2+.01)
-                _fill(passage, poly, frame, 255)
-            mask[(passage > 0) & (openings_raster == HD_OPENING_VALUES['passage'])] = 255
-    return mask, {'policy': '2+ spatially distinct straight rays crossing whole wall + two near-return jambs; 30mm cross-section strips only',
+    return mask, {'policy': '2+ distinct cross-wall straight rays + two near-return jambs; <=3 separated measured strips and <=20pct GT per-opening area',
                   'openings': out, 'confirmed_count': sum(x['confirmed_for_supervision'] for x in out)}

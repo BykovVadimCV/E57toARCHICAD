@@ -5,6 +5,11 @@ on:
     branches: [fix/native-hd-v4]
     paths:
       - '.github/workflows/pilot-hd-10.yml'
+      - 'simscan/observation.py'
+      - 'simscan/ray_evidence.py'
+      - 'simscan/hdmask.py'
+      - 'simscan/hddata.py'
+      - 'tools/audit_hd_observation_pilot.py'
   workflow_dispatch:
 
 jobs:

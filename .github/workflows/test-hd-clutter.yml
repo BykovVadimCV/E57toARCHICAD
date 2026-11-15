@@ -84,7 +84,7 @@ jobs:
               assert complete_hd_level(d, 2., (2048, 1152)), 'Missing paired native scan evidence'
               evidence = json.loads((d / 'scan_evidence_hd.json').read_text())
               assert evidence['frame'] == frame
-              assert evidence['observation']['format'] == 'native-hd-observation-v2'
+              assert evidence['observation']['format'] == 'native-hd-observation-v3'
               assert evidence['observation']['free_rays_available']
               assert evidence['observation']['ray_provenance']['ray_count'] > 0
               for name in ('observation_occupied_hd.png', 'observation_support_hd.png',
@@ -92,7 +92,8 @@ jobs:
                            'observation_uncertain_hd.png',
                            'training_valid_hd.png', 'ray_free_low_hd.png',
                            'ray_free_mid_hd.png', 'ray_free_high_hd.png',
-                           'observation_confirmed_passage_hd.png'):
+                           'observation_confirmed_passage_hd.png',
+                           'wall_face_candidates_hd.png', 'observed_wall_surface_hd.png'):
                   layer = cv2.imread(str(d / name), cv2.IMREAD_UNCHANGED)
                   assert layer is not None and layer.shape == wall.shape
               for name in ('scan_low_hd.png', 'scan_mid_hd.png', 'scan_high_hd.png',

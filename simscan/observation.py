@@ -16,7 +16,7 @@ import numpy as np
 
 from .hd_evidence import SCAN_HD_FILES
 
-OBSERVATION_CONTRACT = "native-hd-observation-v2"
+OBSERVATION_CONTRACT = "native-hd-observation-v3"
 OBSERVATION_FILES = (
     "observation_occupied_hd.png",
     "observation_support_hd.png",
@@ -28,8 +28,35 @@ OBSERVATION_FILES = (
     "ray_free_mid_hd.png",
     "ray_free_high_hd.png",
     "observation_confirmed_passage_hd.png",
+    "wall_face_candidates_hd.png",
+    "observed_wall_surface_hd.png",
 )
 SUPPORT_RADIUS_M = 0.012
+WALL_FACE_DEPTH_M = 0.008  # inside a geometric face, not across its unobserved thickness
+
+
+def observed_wall_surface(wall: np.ndarray, support: np.ndarray, pixel_m: float,
+                          depth_m: float = WALL_FACE_DEPTH_M) -> tuple[np.ndarray, np.ndarray]:
+    """Physical surface candidates vs weak measured-return-supported surface.
+
+    The eroded wall core is deliberately *not* labeled positive, even when a
+    nearby unrelated return has arrived. The candidate face is geometry-only,
+    the second mask requires sensor return proximity. Both masks stay out of
+    network inputs. Return proximity is not proof of a structural reflection.
+    """
+    if (wall.dtype != np.uint8 or support.dtype != np.uint8
+            or wall.shape != support.shape or wall.ndim != 2
+            or not math.isfinite(pixel_m) or not 0 < pixel_m <= .1
+            or not math.isfinite(depth_m) or not 0 < depth_m <= .03):
+        raise ValueError('Invalid wall surface mask geometry')
+    radius = max(1, int(math.ceil(depth_m / pixel_m)))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                       (2*radius+1, 2*radius+1))
+    core = cv2.erode(wall, kernel)
+    candidate = (wall != 0) & (core == 0)
+    observed = candidate & (support != 0)
+    return candidate.astype(np.uint8)*255, observed.astype(np.uint8)*255
+
 
 
 def return_proximity_support(layers: dict[str, np.ndarray], frame: dict,
@@ -141,9 +168,18 @@ def build_observation_masks(layers: dict[str, np.ndarray], frame: dict,
             raise ValueError('Invalid precomputed support raster')
         support = precomputed_support
 
-    # A physical polygon is not automatically an observable positive target.
+    # Never use return proximity to supervise the entire thickness of a wall.
+    # All wall interiors and walls with absent returns remain unknown in loss.
+    face_candidate, observed_surface = observed_wall_surface(wall, support, pitch)
     positive = (wall != 0) | (openings != 0) | (floor_void != 0)
-    supported = (support != 0) | (confirmed_passages != 0)
+    wall_supported = observed_surface != 0
+    # Passage positives need independent cross-wall rays and jamb proximity;
+    # adjacent returns by themselves do not confirm an open aperture.
+    passage_supported = (openings == 3) & (confirmed_passages != 0)
+    ordinary_opening_supported = ((openings == 1) | (openings == 2)) & (support != 0)
+    floor_supported = (floor_void != 0) & (support != 0)
+    supported = (wall_supported | passage_supported
+                 | ordinary_opening_supported | floor_supported)
     unresolved = positive & ~supported
     candidate = (legacy_valid != 0) & (~positive | supported)
 
@@ -159,6 +195,8 @@ def build_observation_masks(layers: dict[str, np.ndarray], frame: dict,
         "training_valid_hd.png": candidate.astype(np.uint8) * 255,
         **ray_bands,
         "observation_confirmed_passage_hd.png": confirmed_passages,
+        "wall_face_candidates_hd.png": face_candidate,
+        "observed_wall_surface_hd.png": observed_surface,
     }
     stats = {
         "format": OBSERVATION_CONTRACT,
@@ -170,7 +208,10 @@ def build_observation_masks(layers: dict[str, np.ndarray], frame: dict,
         "ray_provenance": ray_meta,
         "unknown_policy": "missing_return_is_not_free_space",
         "negative_background_policy": "inherit_20mm_supervision_to_avoid_exterior_hallucinations",
-        "training_valid_policy": "legacy_background_plus_return_proximity_or_confirmed_passage_gated_positive_gt_v2",
+        "training_valid_policy": "physical_body_held_out; measured_surface_and_ray_confirmed_passages_only_v3",
+        "wall_surface_policy": "8mm_inner_face_candidate_intersect_12mm_return_proximity; not_structural_identity_proof",
+        "wall_face_candidate_pixels": int(np.count_nonzero(face_candidate)),
+        "observed_wall_surface_pixels": int(np.count_nonzero(observed_surface)),
         "legacy_valid_pixels": int(np.count_nonzero(legacy_valid)),
         "observed_return_pixels": int(np.count_nonzero(occupied)),
         "unknown_status_pixels": int(occupied.size - np.count_nonzero(occupied)),

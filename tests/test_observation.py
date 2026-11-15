@@ -47,7 +47,8 @@ def test_raw_return_support_only_near_observed_pixels():
     assert images['observation_unknown_hd.png'][15, 18] == 255
     assert images['observation_occupied_hd.png'][15, 18] == 0  # no fabricated scan returns
     assert images['observation_support_hd.png'][15, 18] == 255
-    assert images['training_valid_hd.png'][15, 18] == 255
+    assert images['training_valid_hd.png'][11, 15] == 255  # measured wall face
+    assert images['training_valid_hd.png'][15, 18] == 0  # wall interior held out
     assert not images['training_valid_hd.png'][15, 57]
     assert not images['training_valid_hd.png'][15, 37]  # door without evidence
     assert images['observation_free_hd.png'].sum() == 0
@@ -88,7 +89,7 @@ def test_output_keys_and_binary_dtypes_are_stable():
     for name, arr in images.items():
         assert arr.shape == (60, 90) and arr.dtype == np.uint8
         assert np.isin(arr, [0, 255]).all()
-    assert json.loads(json.dumps(meta))['training_valid_policy'].startswith('legacy_background')
+    assert 'physical_body_held_out' in json.loads(json.dumps(meta))['training_valid_policy']
 
 
 def test_layout_support_reports_each_wall_face_and_both_jambs(tmp_path):
@@ -128,3 +129,31 @@ def test_dataset_metadata_preserves_native_observation_identity(tmp_path):
     (root / 'scenes' / 'a').mkdir(parents=True)
     with pytest.raises(ValueError, match='observation contract changed'):
         write_meta(root, hd_masks=False)
+
+
+def test_only_return_supported_wall_faces_are_supervised_not_wall_core():
+    layers, frame, wall, openings, void, valid = scene()
+    # At 2mm, the nearest weak structural-height return supports only a
+    # nearby measured face, never 10cm of otherwise unseen wall thickness.
+    layers['scan_mid_hd.png'][15, 15] = 255
+    images, meta = build_observation_masks(layers, frame, wall, openings, void, valid)
+    face = images['wall_face_candidates_hd.png'] != 0
+    surface = images['observed_wall_surface_hd.png'] != 0
+    train = images['training_valid_hd.png'] != 0
+    assert np.any(face & surface)
+    assert np.all(surface <= face)
+    assert np.all(surface <= (images['observation_support_hd.png'] != 0))
+    assert np.array_equal(train & (wall != 0), surface)
+    assert np.any((wall != 0) & ~face & ~train)
+    assert meta['observed_wall_surface_pixels'] == int(surface.sum())
+    assert meta['wall_face_candidate_pixels'] == int(face.sum())
+
+
+def test_passage_proximity_never_confirms_whole_opening_without_rays():
+    layers, frame, wall, openings, void, valid = scene()
+    openings[13:18, 33:42] = 3
+    layers['scan_mid_hd.png'][15, 37] = 255
+    images, _ = build_observation_masks(layers, frame, wall, openings, void, valid)
+    assert np.any((openings == 3) & (images['observation_support_hd.png'] != 0))
+    assert not np.any((openings == 3) & (images['training_valid_hd.png'] != 0))
+    assert not images['observation_confirmed_passage_hd.png'].any()

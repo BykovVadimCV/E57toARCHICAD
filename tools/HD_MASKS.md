@@ -27,30 +27,32 @@ point-cloud evidence**:
 
 | File | Contents |
 | --- | --- |
-| `wall_mask_hd.png` | Architectural wall body, uint8 0/255, aperture pixels cut out |
+| `wall_mask_hd.png` | Full physical architectural wall body, for BIM/evaluation only; **not** a positive wall training label |
 | `wall_edges_hd.png` | Native single-pixel wall-body edge |
 | `openings_hd.png` | Native host-wall aperture: 0 background, 1 door, 2 window, 3 passage |
 | `opening_edges_hd.png` | Native single-pixel aperture edge (uint8 0/255) |
 | `floor_void_hd.png` | **True missing floor slab only**, uint8 0/255 |
 | `stair_footprint_hd.png` | Lower-floor stairs as their **own** target, NOT floor void |
 | `supervision_valid_hd.png` | Legacy 20 mm supervision validity, retained for baseline comparison |
+| `wall_face_candidates_hd.png` | Thin 8 mm geometric inner-face candidates (GT only, not automatically observed) |
+| `observed_wall_surface_hd.png` | Face candidates with nearby low/mid/high measured returns; the **only** wall-positive training target |
 | `observation_occupied_hd.png` | Directly measured returns, not synthetic polygon fills |
 | `observation_support_hd.png` | Within 12 mm of a structural-height return; a weak proxy, not semantic wall evidence |
 | `observation_free_hd.png` | Union of measured direct-ray paths, NOT evidence of free vertical columns |
 | `ray_free_low_hd.png` | Measured direct-ray path at some height in low structural band |
 | `ray_free_mid_hd.png` | Measured direct-ray path at some height in mid structural band |
 | `ray_free_high_hd.png` | Measured direct-ray path at some height in high structural band |
-| `observation_confirmed_passage_hd.png` | Narrow, ray-backed passage supervision strips, GT used only for selection |
+| `observation_confirmed_passage_hd.png` | Up to 3 spatially distinct ray-crossing strips, <=20% of each physical passage; GT used only for selection |
 | `observation_unknown_hd.png` | No direct return or validated free-ray evidence |
 | `observation_uncertain_hd.png` | Physical positive GT lacking nearby return support |
-| `training_valid_hd.png` | Conservative positive gate plus legacy exterior/background negative supervision |
+| `training_valid_hd.png` | Physical wall interior held out; observed surface and bounded passages enabled; legacy exterior/background negatives unchanged |
 | `scan_low_hd.png` | Actual E57 XYZ returns at low elevations, 0/255 occupancy |
 | `scan_mid_hd.png` | Actual XYZ returns at middle elevations, 0/255 occupancy |
 | `scan_high_hd.png` | Actual XYZ returns at upper elevations, 0/255 occupancy |
 | `scan_floor_hd.png` | Actual scan returns within 3 cm of floor |
 | `scan_ceiling_hd.png` | Actual scan returns within 3 cm of ceiling |
 | `scan_below_hd.png` | Actual returns 0.1–3 m **below** selected floor, helpful for floor-hole detection |
-| `wall_mask_hd.json` | Native frame/affine, mask legends, format v4, observation contract, physical opening semantics and floor-void policy |
+| `wall_mask_hd.json` | Native frame/affine, mask legends, format v5, observation contract, physical opening semantics and floor-void policy |
 | `scan_evidence_hd.json` | Native frame/affine, band ranges, augmentation, direct-ray origin provenance and hit-count diagnostics |
 
 The physical GT masks are created from **original procedural polygons**, never enlarged
@@ -60,8 +62,9 @@ morphological filling. They are kept separate from the ground-truth geometry.
 All sidecars use the **same pixel-to-world affine and 2 mm grid**.
 
 When training a 2 mm refinement network, use the scan layers and coarse
-network probabilities as inputs; use the wall, aperture, edge and physical
-floor-hole masks as targets, with `training_valid_hd.png` as the new ignore mask. The legacy `supervision_valid_hd.png` is retained for diagnostics. **See `tools/OBSERVATION_POLICY.md` before training**: direct rays can support small parts of open passages, but per-class valid-pixel coverage still requires a pilot-dataset audit before a full training run.
+network probabilities as inputs; use **`observed_wall_surface_hd.png`** for wall-positive supervision,
+aperture and physical floor-hole masks for other classes, and `training_valid_hd.png`
+as the ignore mask. Keep `wall_mask_hd.png` as complete geometry GT, **not** the learning target. The legacy `supervision_valid_hd.png` is retained for diagnostics. **See `tools/OBSERVATION_POLICY.md` before training**: direct rays can support small parts of open passages, but per-class valid-pixel coverage still requires a pilot-dataset audit before a full training run.
 Closed door leaves may generate returns in the aperture: this is expected,
 because an architectural doorway is not synonymous with empty scan space.
 

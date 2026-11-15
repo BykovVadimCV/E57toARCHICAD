@@ -29,10 +29,14 @@ def tiny_level(p):
 def test_hd_input_does_not_leak_geometry_targets(tmp_path):
     tiny_level(tmp_path);a=load_patch(tmp_path,8,8,64)
     wall=np.zeros((80,100),np.uint8);wall[20:30,30:50]=255;cv2.imwrite(str(tmp_path/'wall_mask_hd.png'),wall)
+    surf=np.zeros((80,100),np.uint8);surf[20,30:50]=255
+    cv2.imwrite(str(tmp_path/'observed_wall_surface_hd.png'),surf)
+    valid=np.full((80,100),255,np.uint8);valid[20:30,30:50]=0;valid[20,30:50]=255
+    cv2.imwrite(str(tmp_path/'training_valid_hd.png'),valid)
     b=load_patch(tmp_path,8,8,64)
     assert a['input'].shape==(15,64,64)
     np.testing.assert_array_equal(a['input'],b['input'])
-    assert (b['sem']==1).sum()==200
+    assert (b['sem']==1).sum()==20  # only measured surface, not 200-px wall volume
     assert np.allclose(b['input'][12,12:40,12:40],.5)  # coarse density feature
 
 
@@ -96,3 +100,12 @@ def test_hd_patch_physical_opening_classes_are_consistent(tmp_path):
     assert result['sem'][10,10]==2
     assert result['sem'][20,20]==3
     assert result['sem'][30,30]==4
+
+
+def test_hd_loader_rejects_wall_body_positive_leakage(tmp_path):
+    import pytest
+    tiny_level(tmp_path)
+    wall=np.zeros((80,100),np.uint8);wall[20:30,30:50]=255
+    cv2.imwrite(str(tmp_path/'wall_mask_hd.png'),wall)
+    with pytest.raises(ValueError,match='Full wall interior'):
+        load_patch(tmp_path,8,8,64)

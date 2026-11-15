@@ -236,7 +236,7 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
     np.savez_compressed(folder / 'scan_counts_hd.npz', counts=counts)
     atomic_json(folder / "wall_mask_hd.json", data)
     atomic_json(folder / "scan_evidence_hd.json", {
-        "format": "simscan-native-hd-scan-evidence-v3",
+        "format": "simscan-native-hd-scan-evidence-v4",
         "observation": observation_stats,
         "observation_files": list(OBSERVATION_FILES),
         "frame": frame, "pixel_to_world": affine(frame),
@@ -255,7 +255,7 @@ def write_hd_level(scene_dir, level_dir, pixel_mm: float = 2.0,
         with path.open('rb') as src:
             for chunk in iter(lambda: src.read(4 * 1024**2), b''): h.update(chunk)
         files[name] = dict(bytes=path.stat().st_size, sha256=h.hexdigest())
-    atomic_json(folder / 'hd_complete.json', {'version': 3, 'files': files})
+    atomic_json(folder / 'hd_complete.json', {'version': 4, 'files': files})
     return data
 
 
@@ -274,9 +274,9 @@ def complete_hd_level(folder, pixel_mm: float, min_size: tuple[int, int]) -> boo
                 doc.get("opening_semantics") != OPENING_SEMANTICS_VERSION or
                 doc.get("opening_values") != dict(HD_OPENING_VALUES) or
                 doc.get("observation_contract") != OBSERVATION_CONTRACT or
-                evidence.get("format") != "simscan-native-hd-scan-evidence-v3" or
+                evidence.get("format") != "simscan-native-hd-scan-evidence-v4" or
                 evidence.get("observation", {}).get("format") != OBSERVATION_CONTRACT or
-                marker.get("version") != 3):
+                marker.get("version") != 4):
             return False
         frame = doc["frame"]
         size = (frame["width"], frame["height"])

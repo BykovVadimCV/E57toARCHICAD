@@ -2,8 +2,8 @@
 
 ## What this validates
 
-The pilot checks how much of the physical polygon ground truth is retained as
-training targets under the *observability-v2* masks, and whether ray-crossing
+The pilot checks what fraction of the **measured wall-face candidates** is retained as
+wall training targets (and separately how much physical polygon GT is excluded) under the *observability-v3* masks, and whether ray-crossing
 proof can support label-free passages. It checks the actual 2 mm image masks,
 validates complete-scene hashes and level splits, and quantifies retention
 separately for wall, door, window, passage, and physical upper-floor void.
@@ -46,11 +46,12 @@ as a short-lived artifact (7 days), and an audit report (14 days).
 
 ## Principal quantitative indicators
 
-- Physical class area at native 2 mm, physical and train-valid pixels, and
-  retained fraction for each class, with **null** fractions when a class is absent.
+- Physical class area at native 2 mm, train-valid pixels, **wall-face candidate area**,
+  **observed wall-face training coverage**, and physical-GT retention as separate metrics.
 - Total unsupported-positive fraction. It is allowed for actual physical GT to
   have unsupported areas; *only their inclusion in training* is a hard error.
-- Per-passage `confirmed_for_supervision` and count of confirmed narrow strips.
+- Per-passage `confirmed_for_supervision`, <=3 separated ray strips, and strict
+  **20% per-opening raster-area cap** checked against measured-ray metadata.
 - Mean return proximity per wall's *two faces* (upper bound, not identity).
 - Per-opening fraction with nearby returns at *both* jambs.
 - Retention of existing negative background supervision. Current rule must

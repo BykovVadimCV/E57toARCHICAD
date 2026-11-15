@@ -149,7 +149,9 @@ def test_passage_confirmation_requires_two_jambs_and_cross_wall_rays(tmp_path):
     assert stats['confirmed_count'] == 1
     assert stats['openings'][0]['crossing_direct_ray_samples'] == 3
     assert confirmed.any() and np.all(openings[confirmed>0]==3)
-    assert np.count_nonzero(confirmed) < np.count_nonzero(openings == 3)  # no entire-GT leakage
+    assert np.count_nonzero(confirmed) <= 0.2*np.count_nonzero(openings == 3)
+    assert stats['openings'][0]['confirmed_area_fraction'] <= .20
+    assert len(stats['openings'][0]['representative_ray_offsets_m']) <= 3
     no_jamb,stats=audit_passage_crossings(gt,rays,frame,np.zeros_like(support),openings,0.)
     assert stats['confirmed_count']==0 and not no_jamb.any()
     above=_rays([[x,.65,2.55] for x in (.88,.99,1.1)],
@@ -163,3 +165,33 @@ def test_passage_confirmation_requires_two_jambs_and_cross_wall_rays(tmp_path):
                   [[x,.86,1.1] for x in (.88,.99,1.1)])
     blocked,stats=audit_passage_crossings(gt,stopped,frame,support,openings,0.)
     assert stats['confirmed_count']==0 and not blocked.any()
+
+
+def test_many_distinct_direct_rays_cannot_fill_entire_passage(tmp_path):
+    from simscan.layout import Layout, Room, Wall, Opening
+    from simscan.netinput import SceneGT
+    from simscan.hdmask import render_hd_masks
+    scene=tmp_path/'scene'; scene.mkdir()
+    layout=Layout(2.7,[Room(0,(0.,0.,3.,3.),(0.,0.,3.,3.),ceiling_z=2.7)],
+                  [Wall(0,(.1,1.5),(2.9,1.5),.2,'interior')],
+                  [Opening(0,0,'passage',1.4,1.0,0.,2.4)])
+    (scene/'layout.json').write_text(json.dumps(layout.to_dict()))
+    gt=SceneGT(scene,0)
+    frame,_,openings,_=render_hd_masks(gt,dict(origin_x=0.,origin_y=0.,pixel_m=.02,width=150,height=150),2.,(120,120))
+    support=np.zeros_like(openings)
+    wall=gt.layout.walls[0];op=gt.layout.openings[0]
+    for sign in (-1,1):
+        for off in (-wall.thickness/2,wall.thickness/2):
+            pt=gt.xy(np.asarray([wall.point(op.s+sign*(op.width/2+.04),off)]))[0]
+            x=int((pt[0]-frame['origin_x'])/frame['pixel_m'])
+            y=frame['height']-1-int((pt[1]-frame['origin_y'])/frame['pixel_m'])
+            cv2.circle(support,(x,y),6,255,-1)
+    xs=np.linspace(.95,1.85,80)
+    rays=_rays([[x,1.15,1.1] for x in xs],[[x,1.85,1.1] for x in xs])
+    mask,meta=audit_passage_crossings(gt,rays,frame,support,openings,0.)
+    assert meta['confirmed_count']==1
+    item=meta['openings'][0]
+    assert len(item['representative_ray_offsets_m'])<=3
+    assert item['confirmed_area_px'] == np.count_nonzero(mask)
+    assert 0 < item['confirmed_area_fraction'] <= .20
+    assert np.count_nonzero(mask) <= .20*np.count_nonzero(openings == 3)

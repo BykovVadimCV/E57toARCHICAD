@@ -54,7 +54,7 @@ def load_patch(folder, top=0, left=0, size=512, cache=None):
     for channel in coarse:
         inputs.append(cv2.warpAffine(channel.astype(np.float32),matrix,(size,size),
             flags=cv2.INTER_LINEAR|cv2.WARP_INVERSE_MAP,borderMode=cv2.BORDER_CONSTANT))
-    wall=image('wall_mask_hd.png')>0;aperture=image('openings_hd.png');void=image('floor_void_hd.png')>0
+    wall=image('observed_wall_surface_hd.png')>0;aperture=image('openings_hd.png');void=image('floor_void_hd.png')>0
     if not np.isin(aperture,[0,1,2,3]).all():raise ValueError('Invalid opening classes')
     semantic=np.zeros((size,size),np.int64);semantic[wall]=HD_SEMANTIC_CLASSES['wall']
     for kind in ('door','window','passage'):
@@ -64,6 +64,8 @@ def load_patch(folder, top=0, left=0, size=512, cache=None):
             evidence.get("observation", {}).get("format") != OBSERVATION_CONTRACT:
         raise ValueError("Missing native HD observation contract: regenerate HD data")
     valid=image('training_valid_hd.png')>0
+    if np.any(valid & (image('wall_mask_hd.png')>0) & ~wall):
+        raise ValueError('Full wall interior was admitted as measured wall supervision')
     edges=(image('wall_edges_hd.png')>0)|(image('opening_edges_hd.png')>0)
     return dict(input=np.stack(inputs),sem=semantic,valid=valid,edge=edges.astype(np.float32)[None])
 
@@ -91,7 +93,7 @@ class HDPatches:
         top=int(rng.integers(max(1,meta['height']-self.size+1)));left=int(rng.integers(max(1,meta['width']-self.size+1)))
         # Bias training towards architecture; validation uses fixed uniform tiles.
         if self.split=='train' and rng.random()<.6:
-            wall=cv2.imread(str(path/'wall_mask_hd.png'),cv2.IMREAD_GRAYSCALE)
+            wall=cv2.imread(str(path/'observed_wall_surface_hd.png'),cv2.IMREAD_GRAYSCALE)
             yy,xx=np.nonzero(wall)
             if len(yy):
                 k=int(rng.integers(len(yy)));top=max(0,min(meta['height']-self.size,int(yy[k])-self.size//2));left=max(0,min(meta['width']-self.size,int(xx[k])-self.size//2))
