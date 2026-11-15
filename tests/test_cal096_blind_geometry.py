@@ -95,7 +95,7 @@ def test_topology_detects_corner_and_tee_from_plane_geometry():
     ])
     result = extract_wall_geometry(cloud, seed=34)
     kinds = {e["type"] for e in result["topology"]["edges"]}
-    assert "corner" in kinds, result["topology"]
+    assert "corner" in kinds, (result["topology"], [(s["id"], s["normal_xy"], s["plane_bias"], s["s_min_m"], s["s_max_m"]) for s in result["segments"]])
     assert "tee" in kinds, result["topology"]
 
 
@@ -107,7 +107,7 @@ def test_parallel_offset_faces_are_hypotheses_not_adjacency_edges():
     result = extract_wall_geometry(cloud, seed=43)
     candidates = [s for s in result["segments"] if s["wall_candidate"]]
     assert len(candidates) == 2
-    assert result["topology"]["parallel_face_candidates"]
+    assert result["topology"]["parallel_face_candidates"], [(s["id"], s["normal_xy"], s["plane_bias"], s["s_min_m"], s["s_max_m"]) for s in candidates]
     assert not result["topology"]["edges"]
 
 
