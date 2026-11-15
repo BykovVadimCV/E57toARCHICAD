@@ -4,7 +4,7 @@ Run from repository root:
     PYTHONPATH=. python tools/validate_cal09_two_scale_defects.py --out /tmp/CAL09
 
 2 x 2 factorial: coarse zones 0.8/1.8 m, independent fine texture
-0.15/0.35 m; plus unchanged 2-4 mm uniform control. Never updates YAML.
+0.35/0.65 m; plus unchanged 2-4 mm uniform control. Never updates YAML.
 """
 from __future__ import annotations
 
@@ -31,10 +31,10 @@ FORMAT = "cal09-two-scale-wall-defects-v1"
 SEEDS = tuple(range(46101, 46109))
 VARIANTS = {
     "uniform_2_4": (0., .8, 0.),
-    "zone08_fine15": (.2, .8, .15),
     "zone08_fine35": (.2, .8, .35),
-    "zone18_fine15": (.2, 1.8, .15),
+    "zone08_fine65": (.2, .8, .65),
     "zone18_fine35": (.2, 1.8, .35),
+    "zone18_fine65": (.2, 1.8, .65),
 }
 
 
@@ -215,7 +215,7 @@ def run(out, config=Path("configs/customer_like.yaml"), reference=REAL_REF,
             finally:
                 shutil.rmtree(scratch, ignore_errors=True)
         (out / "cal09_progress.json").write_text(
-            json.dumps({"complete_seed_groups": sum(r["variant"] == "zone18_fine35" for r in records),
+            json.dumps({"complete_seed_groups": sum(r["variant"] == "zone18_fine65" for r in records),
                         "expected_seed_groups": len(SEEDS),
                         "aggregate_no_coordinates": [
                             {"seed": r["seed"], "variant": r["variant"],
