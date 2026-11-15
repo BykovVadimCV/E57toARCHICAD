@@ -1,0 +1,70 @@
+name: CAL-05 paired roughness registration range noise
+
+on:
+  push:
+    branches: [fix/native-hd-v4]
+    paths:
+      - '.github/workflows/cal05-paired-factors.yml'
+      - 'tools/calibrate_factorial_surfaces.py'
+      - 'tools/calibrate_multiroom_surfaces.py'
+      - 'tools/calibrate_e57_surfaces.py'
+      - 'tools/calibrate_real_synthetic_surfaces.py'
+      - 'tests/test_cal05_paired_factorials.py'
+      - 'configs/calibration_real_e57_surfaces.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  paired-factor-sensitivity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Open3D and numerical estimator
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgl1 libglib2.0-0 libegl1 libopengl0
+          python -m pip install 'numpy>=1.26,<3' 'scipy>=1.11' 'PyYAML>=6,<7' 'shapely>=2' 'opencv-python-headless>=4.8' 'pye57>=0.4' 'open3d>=0.18,<0.21' 'pytest>=8,<10'
+      - name: Run CAL02 CAL03 CAL04 CAL05 regression checks
+        env:
+          PYTHONPATH: .
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+        run: |
+          python -m pytest -q tests/test_e57_surface_calibration.py tests/test_cal03_surface_comparison.py tests/test_cal04_multiroom_surfaces.py tests/test_cal05_paired_factorials.py
+      - name: Run four paired three-room seeds across seven one-factor variants
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+          OPEN3D_CPU_RENDERING: 'true'
+        run: |
+          python tools/calibrate_factorial_surfaces.py --out /tmp/cal05 --seeds 42121 42122 42123 42124 --max-sample 250000
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path('/tmp/cal05/cal05_results.json').read_text())
+          assert len(d['design']['seeds']) == 4
+          assert len(d['variants']) == 7
+          assert all(v['attempted_scenes'] == 4 for v in d['variants'].values())
+          assert all(all(s['layout_station_matched'] for s in v['per_scene']) for v in d['variants'].values())
+          assert d['auto_update_production_config'] is False
+          print('CAL05 paired four-seed diagnostics completed; no automatic scanner tuning')
+          PY
+      - name: Upload only derived comparison metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cal05-paired-factorial-observations
+          path: |
+            /tmp/cal05/cal05_results.json
+            /tmp/cal05/CAL05_REPORT.md
+          if-no-files-found: warn
+          retention-days: 14
