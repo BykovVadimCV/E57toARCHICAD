@@ -231,12 +231,24 @@ def _group(patches, key):
         k=p.get(key)
         if k is not None and k!='insufficient_support':
             groups.setdefault(k, []).append(p)
-    return {k:{'n_patches':len(v),
-               'median_observed_plane_mad_mm':_median([p['observed_plane_mad_mm'] for p in v]),
-               'median_observed_plane_rms_mm':_median([p['observed_plane_rms_mm'] for p in v]),
-               'n_independent_scenes':len(set(p['seed'] for p in v)),
-               'valid_for_comparative_inference':len(set(p['seed'] for p in v))>=3 and len(v)>=5}
-            for k,v in sorted(groups.items())}
+    out = {}
+    for key, rows in sorted(groups.items()):
+        per_seed = {}
+        for row in rows:
+            per_seed.setdefault(row['seed'], []).append(row['observed_plane_mad_mm'])
+        n_scenes = len(per_seed)
+        out[key] = {
+            'n_patches': len(rows),
+            'median_observed_plane_mad_mm': _median([p['observed_plane_mad_mm'] for p in rows]),
+            'median_observed_plane_rms_mm': _median([p['observed_plane_rms_mm'] for p in rows]),
+            'n_independent_scenes': n_scenes,
+            'per_scene': [{'seed': seed, 'n_patches': len(v),
+                           'median_observed_plane_mad_mm': _median(v)}
+                          for seed, v in sorted(per_seed.items())],
+            # For diagnostic tabulation only; NOT a statistical inference claim.
+            'minimum_diagnostic_coverage': n_scenes >= 3 and len(rows) >= 5,
+        }
+    return out
 
 
 def summarize(real_reference_dict, scenes):
@@ -281,10 +293,24 @@ def summarize(real_reference_dict, scenes):
         f.append('FEW_ELIGIBLE_PLANAR_PATCHES')
     if sum(p['coverage']=='multi_station' for p in patches)<5:
         f.append('SPARSE_MULTISTATION_WALL_PATCHES')
-    if not any(v['valid_for_comparative_inference'] for v in summaries['synthetic']['range_groups'].values()):
+    if not any(v['minimum_diagnostic_coverage'] for v in summaries['synthetic']['range_groups'].values()):
         f.append('NO_WELL_SUPPORTED_RANGE_STRATUM')
-    if not any(v['valid_for_comparative_inference'] for v in summaries['synthetic']['incidence_groups'].values()):
+    if not any(v['minimum_diagnostic_coverage'] for v in summaries['synthetic']['incidence_groups'].values()):
         f.append('NO_WELL_SUPPORTED_INCIDENCE_STRATUM')
+    if len(real)<5:
+        f.append('ONLY_TWO_REAL_SITES_NO_STATION_PROVENANCE')
+    if len(medians)<5:
+        f.append('THREE_SEED_EXPLORATORY_STUDY_NOT_STATISTICAL_CALIBRATION')
+    far = [v for k,v in summaries['synthetic']['range_groups'].items()
+           if k.startswith(('4–','6–','9+'))]
+    if not any(v['minimum_diagnostic_coverage'] for v in far):
+        f.append('FAR_RANGE_4M_PLUS_UNDERSAMPLED')
+    grazing = [v for k,v in summaries['synthetic']['incidence_groups'].items()
+               if k.startswith(('60–','75–'))]
+    if not any(v['minimum_diagnostic_coverage'] for v in grazing):
+        f.append('GRAZING_INCIDENCE_60DEG_PLUS_UNDERSAMPLED')
+    if len(medians)>1 and min(medians)>0 and max(medians)/min(medians)>1.5:
+        f.append('HIGH_BETWEEN_SCENE_MAD_VARIABILITY')
     return summaries
 
 
@@ -301,11 +327,11 @@ def report_md(doc):
     for title,key in [('Расстояние до наблюдаемой плоскости','range_groups'),
                       ('Угол падения к нормали наблюдаемой плоскости','incidence_groups'),
                       ('Поддержка станций','coverage_groups')]:
-        lines+=['',f'## {title}', '', '| Группа | Патчей | Независимых сцен | MAD, мм | Достаточно наблюдений? |','|---|---:|---:|---:|---|']
+        lines+=['',f'## {title}', '', '| Группа | Патчей | Независимых сцен | MAD, мм | Мин. диагностическое покрытие? |','|---|---:|---:|---:|---|']
         for name,row in s[key].items():
             lines.append(f"| {name} | {row['n_patches']} | {row['n_independent_scenes']} | "
-                         f"{row['median_observed_plane_mad_mm']} | {'да' if row['valid_for_comparative_inference'] else 'нет'} |")
-    lines+=['', '### Реальный ориентир CAL-02',
+                         f"{row['median_observed_plane_mad_mm']} | {'да' if row['minimum_diagnostic_coverage'] else 'нет'} |")
+    lines+=['', 'Таблицы агрегируют патчи; медианы отдельно по seed содержатся в JSON. Ни одна группа не является доказательством причинно-следственной связи.', '', '### Реальный ориентир CAL-02',
             f"Медианы двух объектов: {', '.join(str(x) for x in rr['site_median_mad_mm'])} мм.",
             'Для реальных E57 дальность, угол и перекрытие исходных станций **не наблюдаемы**.',
             '', '### Проверки качества', '']

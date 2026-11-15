@@ -16,7 +16,7 @@ The two original E57 files expose only one data3D cloud each, without row/column
 2. Read valid return XYZ from each scan and transform it using the **written** station pose. Keep a single priority reservoir of at most 250,000 returns over all stations.
 3. Detect wall candidates with the CAL-02 estimator using only observed Cartesian points. Select at most the 24 largest locally supported eligible patches per scene.
 4. Calculate the median station-local range, estimated incidence angle and the number of contributing stations to each local wall patch. Multi-station evidence requires >=25 direct returns and >=10% direct-return share **per contributing station**, for at least two stations.
-5. Record MAD/RMS by patch and group into non-overlapping range/angle bins and the single/multi-station coverage cohorts. Mark groups with fewer than five patches or fewer than three independent scenes as insufficient for comparison.
+5. Record MAD/RMS by patch and group into non-overlapping range/angle bins and the single/multi-station coverage cohorts. Mark groups with fewer than five patches or fewer than three independent scenes as insufficient for **diagnostic coverage** (this is not statistical inference). Also warn when no far-range (4+ m) or grazing-incidence (60°+) group meets that minimum, when scene MAD varies strongly, or when there are only three seeds and two real sites.
 6. Keep per-scene medians separate; a large number of patches within one scene does not create independent sites. Save only summaries and patch statistics without sensor poses, raw points or coordinates.
 
 ## Non-goals and safety boundaries

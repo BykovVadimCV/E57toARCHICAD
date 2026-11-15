@@ -102,7 +102,11 @@ def test_independent_inference_guard_and_missing_real_station_metadata():
     assert doc['auto_update_production_config'] is False
     assert doc['real_reference']['per_station_range_or_incidence']=='UNAVAILABLE_ORIGINAL_E57_MERGED'
     assert 'INSUFFICIENT_INDEPENDENT_MULTROOM_SCENES' in doc['quality_flags']
-    assert not doc['synthetic']['range_groups']['2–4 m']['valid_for_comparative_inference']
+    assert not doc['synthetic']['range_groups']['2–4 m']['minimum_diagnostic_coverage']
+    assert 'ONLY_TWO_REAL_SITES_NO_STATION_PROVENANCE' in doc['quality_flags']
+    assert 'FAR_RANGE_4M_PLUS_UNDERSAMPLED' in doc['quality_flags']
+    assert 'GRAZING_INCIDENCE_60DEG_PLUS_UNDERSAMPLED' in doc['quality_flags']
+    assert len(doc['synthetic']['range_groups']['2–4 m']['per_scene'])==2
     assert 'физическую калибровку' in report_md(doc) or 'Параметры сканера' in report_md(doc)
 
 
