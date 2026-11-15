@@ -323,9 +323,21 @@ def main():
                       max_points=args.max_points)
     print(json.dumps({
         "seed": result["seed"], "scenes": result["n_cases"],
-        "point_f1": round(float(np.mean([
+        "case_metrics": [{
+            "variant": x["variant"],
+            "point_precision": x["metrics"]["point"]["precision"],
+            "point_recall": x["metrics"]["point"]["recall"],
+            "point_fpr": x["metrics"]["point"]["false_positive_rate"],
+            "point_f1": x["metrics"]["point"]["f1"],
+            "wall_instance_recall": x["metrics"]["segments"]["instance_recall"],
+            "topology_edge_precision": x["metrics"]["topology"]["edge_precision"],
+            "topology_edge_recall": x["metrics"]["topology"]["edge_recall"],
+            "candidate_segments": x["metrics"]["segments"]["candidate_count"],
+            "predicted_edges": x["metrics"]["topology"]["predicted_edge_count"],
+        } for x in result["cases"]],
+        "mean_point_f1": round(float(np.mean([
             x["metrics"]["point"]["f1"] or 0. for x in result["cases"]])), 4),
-        "wall_instance_recall": round(float(np.mean([
+        "mean_wall_instance_recall": round(float(np.mean([
             x["metrics"]["segments"]["instance_recall"] or 0.
             for x in result["cases"]])), 4),
     }), flush=True)
