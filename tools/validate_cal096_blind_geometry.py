@@ -222,7 +222,7 @@ def one_case(config_path, seed, variant, out, *, angular_step_deg=.1,
         labels = np.concatenate(label_parts)
         instances = np.concatenate(instance_parts)
         # Crucial information boundary: only XYZ crosses into the blind detector.
-        blind = extract_wall_geometry(xyz)
+        blind = extract_wall_geometry(xyz, config={"max_points": max_points})
         metrics = evaluate_geometry(
             blind, labels, instances, layout_doc["walls"],
             float(layout_doc["ceiling_height"]))
