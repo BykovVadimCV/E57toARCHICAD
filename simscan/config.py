@@ -141,6 +141,12 @@ class RealismConfig:
     max_arcs: int = 1
     arc_min_len_m: float = 1.5
     arc_sagitta_m: Range = (0.15, 0.9)           # стрела дуги
+    # CAL-07: редкие пространственно-кластеризованные зоны повышенной неровности.
+    # Ноль сохраняет прежнюю однородную модель без дополнительных случайных выборок.
+    wall_roughness_tail_probability: float = 0.0
+    wall_roughness_tail_sigma_mm: Range = (8.0, 12.0)
+    wall_roughness_tail_corr_m: float = 0.8
+    wall_roughness_tail_transition_sigma: float = 0.15
 
 
 @dataclass

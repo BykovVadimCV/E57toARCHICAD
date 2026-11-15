@@ -143,7 +143,7 @@ def _median(values):
 
 
 def patch_evidence(sample: TaggedReservoir, *, seed=42, max_lines=5, max_patches=24,
-                   threshold_m=0.025):
+                   threshold_m=0.025, include_patch_grid=False):
     """Same CAL-02 local patches, plus tags from observed synthetic rays.
 
     Incidence is relative to a wall normal *estimated from measured XYZ*.
@@ -161,8 +161,8 @@ def patch_evidence(sample: TaggedReservoir, *, seed=42, max_lines=5, max_patches
         zz = wall[:, 2]
         tmin, tmax = np.quantile(along, [.03,.97])
         zmin, zmax = np.quantile(zz, [.03,.97])
-        for s0 in np.arange(tmin, tmax, 0.9):
-            for z0 in np.arange(zmin, zmax, 1.25):
+        for patch_col, s0 in enumerate(np.arange(tmin, tmax, 0.9)):
+            for patch_row, z0 in enumerate(np.arange(zmin, zmax, 1.25)):
                 sel = (along >= s0) & (along < s0+.9) & (zz >= z0) & (zz < z0+1.25)
                 sub = wall[sel]
                 if len(sub) < 110:
@@ -211,6 +211,10 @@ def patch_evidence(sample: TaggedReservoir, *, seed=42, max_lines=5, max_patches
                             p=xyz[picks[sample.stations[picks] == sid], :2]
                             offsets.append(float(np.median(p @ normal + bias)))
                         row['interstation_normal_offset_span_mm'] = round((max(offsets)-min(offsets))*1000,4)
+                if include_patch_grid:
+                    # Local integer cells only; no world coordinates or station poses.
+                    row['patch_col'] = int(patch_col)
+                    row['patch_row'] = int(patch_row)
                 patches.append(row)
     patches.sort(key=lambda p:(p['inlier_points'],-p['observed_plane_mad_mm']),reverse=True)
     patches=patches[:max_patches]

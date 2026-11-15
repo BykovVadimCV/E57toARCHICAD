@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import math
+from statistics import NormalDist
 
 import numpy as np
 
@@ -29,19 +30,42 @@ def sample_params(cfg: RealismConfig, rng: np.random.Generator) -> dict:
     if not cfg.enabled:
         return {"enabled": False, "warp": np.eye(2).tolist()}
     u = lambda r: float(rng.uniform(r[0], r[1]))  # noqa: E731
+    probability = float(cfg.wall_roughness_tail_probability)
+    tail_lo, tail_hi = map(float, cfg.wall_roughness_tail_sigma_mm)
+    base_lo, base_hi = map(float, cfg.wall_unevenness_mm)
+    if not 0.0 <= probability < 0.5:
+        raise ValueError("wall_roughness_tail_probability must be in [0, 0.5)")
+    if tail_lo <= 0 or tail_hi < tail_lo:
+        raise ValueError("wall_roughness_tail_sigma_mm must be a positive ordered range")
+    if cfg.wall_roughness_tail_corr_m <= 0 or cfg.wall_roughness_tail_transition_sigma <= 0:
+        raise ValueError("roughness tail correlation and transition must be positive")
+    if probability > 0 and tail_lo < base_hi:
+        raise ValueError("roughness tail sigma must be >= the maximum base wall unevenness")
     shear = math.radians(float(rng.normal(0, cfg.shear_deg_sigma)))
     k = 32
     corr = u(cfg.unevenness_corr_m)
     lean_corr = 6.0
+    # Keep the historical random stream exactly intact: the tail uses a
+    # deterministic transform of existing RFF basis and the already sampled
+    # base amplitude. Enabling CAL-07 therefore cannot move walls/stations.
+    unevenness_mm = u(cfg.wall_unevenness_mm)
+    roughness_fraction = (0.5 if base_hi == base_lo else
+                          float(np.clip((unevenness_mm - base_lo) / (base_hi - base_lo), 0, 1)))
+    tail_sigma_mm = tail_lo + roughness_fraction * (tail_hi - tail_lo)
     return {
         "enabled": True,
         "tessellation_m": cfg.tessellation_m,
-        "unevenness_m": u(cfg.wall_unevenness_mm) / 1000,
+        "unevenness_m": unevenness_mm / 1000,
+        "roughness_tail_probability": probability,
+        "roughness_tail_sigma_m": tail_sigma_mm / 1000,
+        "roughness_tail_corr_m": float(cfg.wall_roughness_tail_corr_m),
+        "roughness_tail_transition_sigma": float(cfg.wall_roughness_tail_transition_sigma),
         "corr_m": corr,
         "lean_per_m": u(cfg.lean_mm_per_m) / 1000,
         "shear_deg": math.degrees(shear),
         "warp": [[1.0, math.tan(shear)], [0.0, 1.0]],
-        # частоты и фазы поля: по набору на каждую ось смещения
+        # Existing random fields are unchanged; the z-field also supplies a
+        # spatially smooth envelope for CAL-07's horizontal wall-normal tails.
         "w": rng.normal(0, 1 / corr, (3, k, 3)).tolist(),
         "phi": rng.uniform(0, 2 * math.pi, (3, k)).tolist(),
         "w_lean": rng.normal(0, 1 / lean_corr, (2, 8, 2)).tolist(),
@@ -59,15 +83,48 @@ def jitter_thickness(layout: Layout, mm: float, rng: np.random.Generator) -> Non
         w.ext1 += 0.01
 
 
+def roughness_tail_envelope(p: np.ndarray, params: dict) -> np.ndarray:
+    """Smooth clustered envelope in [0,1]; probability is its nominal Gaussian tail."""
+    probability = float(params.get("roughness_tail_probability", 0.0))
+    if probability <= 0:
+        return np.zeros(len(p), dtype=np.float64)
+    if not 0 < probability < 0.5:
+        raise ValueError("roughness tail probability must be in (0, 0.5)")
+    w = np.asarray(params["w"])[2]              # reuse existing RFF: no RNG-stream shift
+    phi = np.asarray(params["phi"])[2]
+    corr = float(params["corr_m"])
+    tail_corr = float(params["roughness_tail_corr_m"])
+    if corr <= 0 or tail_corr <= 0:
+        raise ValueError("roughness tail correlation lengths must be positive")
+    # Scale the existing 3-D RFF frequencies to the desired cluster length.
+    # The envelope is spatially smooth, so neighbouring wall patches form zones
+    # rather than isolated vertex spikes or discontinuous mesh seams.
+    wt = w * (corr / tail_corr)
+    raw = math.sqrt(2.0 / w.shape[0]) * np.cos(p @ wt.T + phi).sum(1)
+    threshold = NormalDist().inv_cdf(1.0 - probability)
+    transition = float(params.get("roughness_tail_transition_sigma", 0.15))
+    if transition <= 0:
+        raise ValueError("roughness tail transition must be positive")
+    u = np.clip((raw - (threshold - transition)) / (2.0 * transition), 0.0, 1.0)
+    return u * u * (3.0 - 2.0 * u)
+
+
 def displacement(p: np.ndarray, params: dict) -> np.ndarray:
-    """Поле смещений D(p): неровность (3 компоненты) + завал от вертикали (z * g(x, y))."""
+    """Поле неровности; CAL-07 плавно усиливает XY-смещение в редких 3-D зонах."""
     w = np.asarray(params["w"])                  # (3, k, 3)
     phi = np.asarray(params["phi"])              # (3, k)
     k = w.shape[1]
+    base_sigma = float(params["unevenness_m"])
+    envelope = roughness_tail_envelope(p, params)
+    tail_sigma = float(params.get("roughness_tail_sigma_m", base_sigma))
+    local_sigma = base_sigma + envelope * (tail_sigma - base_sigma)
     d = np.empty_like(p)
     for axis in range(3):
         arg = p @ w[axis].T + phi[axis]          # (n, k)
-        d[:, axis] = params["unevenness_m"] * math.sqrt(2.0 / k) * np.cos(arg).sum(1)
+        # Wall-normal displacement is horizontal; retain the calibrated base
+        # vertical component so the floor/ceiling datum is not globally inflated.
+        sigma = local_sigma if axis < 2 else base_sigma
+        d[:, axis] = sigma * math.sqrt(2.0 / k) * np.cos(arg).sum(1)
     wl = np.asarray(params["w_lean"])            # (2, 8, 2)
     pl = np.asarray(params["phi_lean"])
     for axis in range(2):
