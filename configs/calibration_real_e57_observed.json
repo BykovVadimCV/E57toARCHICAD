@@ -1,0 +1,65 @@
+{
+  "format": "native-hd-density-reference-v1",
+  "input_kind": "recorded real E57 projected points: 2-mm native count rasters, NOT model predictions",
+  "input_file_sha256": "fa0837e612efd205062d5b9ec994afe139e7d06a10ab688125dcc000529a0475",
+  "scan_count_file1": 1,
+  "scan_count_file2": 1,
+  "levels": [
+    {
+      "pixel_m": 0.002,
+      "structural_returns": 13590438,
+      "occupied_2mm_cells": 863298,
+      "structural_returns_per_frame_m2": 82455.04251849264,
+      "occupied_2mm_cells_per_frame_m2": 5237.746811113053,
+      "kind": "real",
+      "label": "real_level_1",
+      "band_occupied_cells": {
+        "scan_low_hd.png": 411887,
+        "scan_mid_hd.png": 230904,
+        "scan_high_hd.png": 570571,
+        "scan_floor_hd.png": 2511424,
+        "scan_ceiling_hd.png": 4756500,
+        "scan_below_hd.png": 31
+      }
+    },
+    {
+      "pixel_m": 0.002,
+      "structural_returns": 10096197,
+      "occupied_2mm_cells": 1554676,
+      "structural_returns_per_frame_m2": 50509.67449511322,
+      "occupied_2mm_cells_per_frame_m2": 7777.797789144233,
+      "kind": "real",
+      "label": "real_level_2",
+      "band_occupied_cells": {
+        "scan_low_hd.png": 856475,
+        "scan_mid_hd.png": 493745,
+        "scan_high_hd.png": 669993,
+        "scan_floor_hd.png": 3591275,
+        "scan_ceiling_hd.png": 4085496,
+        "scan_below_hd.png": 10
+      }
+    },
+    {
+      "pixel_m": 0.002,
+      "structural_returns": 8519877,
+      "occupied_2mm_cells": 1540779,
+      "structural_returns_per_frame_m2": 46017.47068774427,
+      "occupied_2mm_cells_per_frame_m2": 8322.03944596758,
+      "kind": "real",
+      "label": "real_level_3",
+      "band_occupied_cells": {
+        "scan_low_hd.png": 489574,
+        "scan_mid_hd.png": 596788,
+        "scan_high_hd.png": 822182,
+        "scan_floor_hd.png": 2767689,
+        "scan_ceiling_hd.png": 3536793,
+        "scan_below_hd.png": 7933272
+      }
+    }
+  ],
+  "notes": [
+    "No per-station angular calibration from these merged/single E57 exports.",
+    "No GT or predicted segmentation used in source reference.",
+    "Raster count metadata currently labels all sources simulated; real source verified against original E57 filenames and Stage 0 report."
+  ]
+}
