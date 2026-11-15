@@ -92,6 +92,17 @@ def aggregate(paths, phase, expected_fingerprint=None):
             c["metrics"]["topology"]["predicted_edge_count"] for c in group))
         per_seed.append(record)
     summary = {name: _mean([s[name] for s in per_seed]) for name in keys}
+    per_variant = []
+    for variant in VARIANTS:
+        group = [case for case in cases if case["variant"] == variant]
+        row = {"variant": variant}
+        for name, get in keys.items():
+            row[name] = _mean([get(case) for case in group])
+        row["candidate_segments"] = int(sum(
+            case["metrics"]["segments"]["candidate_count"] for case in group))
+        row["predicted_edges"] = int(sum(
+            case["metrics"]["topology"]["predicted_edge_count"] for case in group))
+        per_variant.append(row)
     summary["worst_seed_point_fpr"] = (
         max(s["point_fpr"] for s in per_seed if s["point_fpr"] is not None)
         if any(s["point_fpr"] is not None for s in per_seed) else None)
@@ -121,6 +132,7 @@ def aggregate(paths, phase, expected_fingerprint=None):
         "case_count": len(cases),
         "summary_mean_of_seed_means": summary,
         "per_seed": per_seed,
+        "per_variant_mean_across_seeds": per_variant,
         "preregistered_holdout_gates": GATES,
         "holdout_gate_results": gate_results,
         "decision": (
@@ -156,6 +168,17 @@ def markdown(doc):
     ]
     for name, value in s.items():
         lines.append(f"| {name} | {fmt(value)} |")
+    lines += ["", "## Per-variant means across seeds", "",
+              "| Variant | Point P | Point R | Point FPR | Point F1 | Wall recall | Edge P | Edge R | Candidates | Edges |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for row in doc["per_variant_mean_across_seeds"]:
+        lines.append(
+            f"| {row['variant']} | {fmt(row['point_precision'])} | "
+            f"{fmt(row['point_recall'])} | {fmt(row['point_fpr'])} | "
+            f"{fmt(row['point_f1'])} | {fmt(row['wall_instance_recall'])} | "
+            f"{fmt(row['topology_edge_precision'])} | "
+            f"{fmt(row['topology_edge_recall'])} | "
+            f"{row['candidate_segments']} | {row['predicted_edges']} |")
     lines += ["", "| Seed | Point precision | Point recall | Point FPR | Wall instance recall | Topology edge P | Topology edge R |",
               "|---:|---:|---:|---:|---:|---:|---:|"]
     for row in doc["per_seed"]:
