@@ -133,3 +133,41 @@ shards cannot yield an accepted report.
 
 Production YAML, original E57, GT annotations and trained weights
 are not modified or automatically promoted.
+
+
+## Verified final result
+
+[Successful canonical full run](https://github.com/BykovVadimCV/E57toARCHICAD/actions/runs/43743465844)
+
+[Independent holdout JSON and Markdown artifact](https://github.com/BykovVadimCV/E57toARCHICAD/actions/runs/43743465844/artifacts/14173890037)
+
+All 24/24 canonical raycast scenes, 67 targeted regression tests and
+the real-raycast smoke passed. The winner selected *only* from four
+501xx development seeds was **local** (not a spatial feature set),
+L2=0.01, cross-fitted 95th negative-score percentile, score threshold
+0.27284485. Crossfit development recall 27.2%, mean FPR 5.6%,
+worst-seed FPR 11.3%, cluster recall 24.5%.
+
+Fully untouched 511xx holdout (mean across four seeds, same mesh):
+
+| Rule | Mean recall | Mean FPR | Mean GT cluster recall |
+|---|---:|---:|---:|
+| MAD>=6mm | 12.2% | 2.7% | 12.5% |
+| Raw shape>=4mm | 47.3% | 13.8% | 53.8% |
+| **Selected logistic confidence** | **13.7%** | **2.2%** | **11.8%** |
+
+Brier=0.111; ECE-5=0.040. The dev-selected threshold trades most
+sensitivity for low FPR, and spatial model candidates did not win.
+
+**Final decision: CAL095_ORACLE_SOFT_CONFIDENCE_NOT_ESTABLISHED.**
+
+Three of four holdout gates fail: recall <40%, connected-cluster
+recall <35%, and gain over MAD6 <15 percentage points. FPR <=10%
+alone passes. No 511xx threshold adjustment is permitted.
+
+**Stopping rule triggered:** Discontinue iterative synthetic oracle
+score/threshold trials. The next research work should validate blind
+wall topology from raw point clouds (CAL-09.6), followed by independently
+surveyed real E57 defect truth (CAL-09.7). Neither synthetic
+study can substitute for real-world target truth, and production remains
+blocked on those gates and the final regression/performance review.
