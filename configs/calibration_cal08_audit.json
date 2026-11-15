@@ -1,0 +1,89 @@
+{
+  "verified": true,
+  "decision": "NO_CORRELATION_LENGTH_PASSED_PREDECLARED_GATES",
+  "selected": null,
+  "variants": [
+    {
+      "variant": "tail20_corr08",
+      "scene_median_mad_mm": 1.9827,
+      "scene_median_p90_mm": 4.0691,
+      "scene_median_p95_mm": 5.3057,
+      "p90_gain_ratio": 1.4891,
+      "primary_cluster_scenes": 2,
+      "extended_cluster_scenes": 3,
+      "return_ratio_range": [
+        1.0,
+        1.0001
+      ],
+      "failed_gates": [
+        "typical_median_preserved_six_of_eight",
+        "median_scene_p90_between_5_and_real_upper_plus_1mm",
+        "top24_cluster_in_four_of_eight",
+        "extended_cluster_in_four_of_eight",
+        "cluster_gain_over_short_corr_in_four_of_eight"
+      ]
+    },
+    {
+      "variant": "tail20_corr18",
+      "scene_median_mad_mm": 2.0561,
+      "scene_median_p90_mm": 5.0395,
+      "scene_median_p95_mm": 5.6331,
+      "p90_gain_ratio": 1.6711,
+      "primary_cluster_scenes": 2,
+      "extended_cluster_scenes": 3,
+      "return_ratio_range": [
+        1.0,
+        1.0
+      ],
+      "failed_gates": [
+        "top24_cluster_in_four_of_eight",
+        "extended_cluster_in_four_of_eight",
+        "cluster_gain_over_short_corr_in_four_of_eight"
+      ]
+    },
+    {
+      "variant": "tail20_corr30",
+      "scene_median_mad_mm": 1.8636,
+      "scene_median_p90_mm": 3.4291,
+      "scene_median_p95_mm": 3.7886,
+      "p90_gain_ratio": 1.3711,
+      "primary_cluster_scenes": 2,
+      "extended_cluster_scenes": 2,
+      "return_ratio_range": [
+        1.0,
+        1.0
+      ],
+      "failed_gates": [
+        "p90_gain_20pct_six_of_eight",
+        "median_scene_p90_between_5_and_real_upper_plus_1mm",
+        "top24_cluster_in_four_of_eight",
+        "extended_cluster_in_four_of_eight",
+        "p90_gain_in_both_cohorts_three_of_four",
+        "cluster_gain_over_short_corr_in_four_of_eight"
+      ]
+    },
+    {
+      "variant": "uniform_2_4",
+      "scene_median_mad_mm": 1.7443,
+      "scene_median_p90_mm": 2.5436,
+      "scene_median_p95_mm": 2.6662,
+      "p90_gain_ratio": 1.0,
+      "primary_cluster_scenes": 1,
+      "extended_cluster_scenes": 1,
+      "return_ratio_range": [
+        1.0,
+        1.0
+      ],
+      "failed_gates": [
+        "p90_gain_20pct_six_of_eight",
+        "median_scene_p90_between_5_and_real_upper_plus_1mm",
+        "top24_cluster_in_four_of_eight",
+        "extended_cluster_in_four_of_eight",
+        "p90_gain_in_both_cohorts_three_of_four",
+        "cluster_gain_over_short_corr_in_four_of_eight"
+      ]
+    }
+  ],
+  "source_config_sha256": "c0baf47d322ac0558fcfa6143a449e470c987873f776fa47e4d733b7b87d44c7",
+  "warning": "Two real reference sites, densely selected patches; not physical sensor calibration."
+}
