@@ -245,6 +245,7 @@ def one_case(config_path, seed, variant, out, *, angular_step_deg=.1,
             "metrics": metrics,
             "detector_inputs": blind["detector_inputs"],
             "detector_uses_ground_truth": blind["uses_ground_truth"],
+            "detector_config": blind["config"],
         }
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -264,8 +265,11 @@ def run_seed(out, config=Path("configs/customer_like.yaml"), *,
     out.mkdir(parents=True, exist_ok=True)
     config = Path(config)
     source_sha = hashlib.sha256(config.read_bytes()).hexdigest()
+    detector_sha = hashlib.sha256(Path(__file__).with_name("cal096_blind_geometry.py").read_bytes()).hexdigest()
+    validator_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     fingerprint = hashlib.sha256(json.dumps({
         "format": FORMAT, "source_sha256": source_sha,
+        "detector_sha256": detector_sha, "validator_sha256": validator_sha,
         "angular_step_deg": angular_step_deg, "max_points": max_points,
         "mesh_m": MESH_M,
     }, sort_keys=True).encode()).hexdigest()
@@ -294,6 +298,7 @@ def run_seed(out, config=Path("configs/customer_like.yaml"), *,
         "format": FORMAT, "seed": int(seed), "variants": list(variants),
         "mesh_m": MESH_M, "angular_step_deg": angular_step_deg,
         "max_points": max_points, "source_config_sha256": source_sha,
+        "detector_sha256": detector_sha, "validator_sha256": validator_sha,
         "run_fingerprint": fingerprint, "n_cases": len(cases),
         "cases": cases, "auto_update_production_config": False,
     }
