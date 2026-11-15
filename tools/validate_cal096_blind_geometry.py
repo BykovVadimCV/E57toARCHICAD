@@ -115,6 +115,7 @@ def evaluate_geometry(result, labels, instances, walls, ceiling_height):
     visible_instances = set(int(v) for v in np.unique(sampled_instances[gt_wall]))
     visible_wall_indices = {v - 1 for v in visible_instances if 1 <= v <= len(walls)}
     matched_wall_indices = set()
+    matched_segment_count = 0
     for segment in candidate_segments:
         ids = np.asarray(segment["point_indices"], np.int64)
         pred_wall[ids] = True
@@ -134,6 +135,7 @@ def evaluate_geometry(result, labels, instances, walls, ceiling_height):
         segment_matches[int(segment["id"])] = wall_index if matched else None
         if matched:
             matched_wall_indices.add(wall_index)
+            matched_segment_count += 1
     tp = int(np.count_nonzero(pred_wall & gt_wall))
     fp = int(np.count_nonzero(pred_wall & ~gt_wall))
     fn = int(np.count_nonzero(~pred_wall & gt_wall))
@@ -160,7 +162,7 @@ def evaluate_geometry(result, labels, instances, walls, ceiling_height):
     edge_f1 = ratio(2*len(true_pairs), len(pred_pairs) + len(gt_pairs))
     type_accuracy = ratio(
         sum(pred_types[p] == gt_pairs[p] for p in true_pairs), len(true_pairs))
-    segment_precision = ratio(len(matched_wall_indices), len(candidate_segments))
+    segment_precision = ratio(matched_segment_count, len(candidate_segments))
     instance_recall = ratio(len(matched_wall_indices & visible_wall_indices),
                             len(visible_wall_indices))
     return {
@@ -171,7 +173,7 @@ def evaluate_geometry(result, labels, instances, walls, ceiling_height):
         },
         "segments": {
             "candidate_count": len(candidate_segments),
-            "matched_count": len(matched_wall_indices),
+            "matched_count": matched_segment_count,
             "precision": segment_precision,
             "visible_wall_instances": len(visible_wall_indices),
             "matched_visible_wall_instances": len(matched_wall_indices & visible_wall_indices),
