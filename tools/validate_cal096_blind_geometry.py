@@ -40,7 +40,7 @@ def frozen_config(config_path, seed, variant, angular_step_deg):
 
 def _gt_wall_edges(walls, visible_wall_indices, ceiling_height):
     """Evaluation-only topology from layout axes; never available to detector."""
-    tol, gap_max = .18, .25
+    tol, gap_max = .20, .25
     visible = sorted(set(int(x) for x in visible_wall_indices))
     edges = {}
     for pos, i in enumerate(visible):
