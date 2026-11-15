@@ -29,7 +29,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libgl1 libglib2.0-0 libegl1 libopengl0
-          python -m pip install 'numpy>=1.26,<3' 'scipy>=1.11' 'PyYAML>=6,<7' 'shapely>=2' 'opencv-python-headless>=4.8' 'pye57>=0.4' 'open3d>=0.18,<0.21' 'pillow>=10,<13' 'pytest>=8,<10'
+          python -m pip install 'numpy>=1.26,<3' 'scipy>=1.11' 'PyYAML>=6,<7' 'shapely>=2' 'opencv-python-headless>=4.8' 'pye57>=0.4' 'open3d>=0.18,<0.21' 'pillow>=10,<13' 'matplotlib>=3.8,<4' 'pytest>=8,<10'
       - name: Run CAL-07 and prior calibration regressions
         env:
           PYTHONPATH: .:tools
