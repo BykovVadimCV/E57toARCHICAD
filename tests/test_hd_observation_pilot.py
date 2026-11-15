@@ -96,3 +96,19 @@ def test_audit_refuses_unknown_equals_free(tmp_path):
     cv2.imwrite(str(d/'observation_unknown_hd.png'),img)
     with pytest.raises(ValueError,match='Unknown mask'):
         module.inspect_level(d)
+
+
+def test_quality_gate_flags_wall_starvation_and_passage_overcoverage(tmp_path):
+    row=module.inspect_level(_level(tmp_path))
+    row['metrics']['positive']=100
+    row['metrics']['positive_kept']=6
+    row['metrics']['confirmed_passage']=9
+    row['classes']['wall']['physical_px']=90
+    row['classes']['wall']['trained_px']=5
+    row['classes']['passage']['physical_px']=10
+    summary=module.summarize([row],expected_scenes=1)
+    assert summary['quality_gate']['approved_for_training'] is False
+    assert summary['confirmed_passage_area_fraction']==0.9
+    assert any('Low wall target retention' in msg for msg in summary['warnings'])
+    assert any('Passage ray-confirmed pixels cover' in msg for msg in summary['warnings'])
+    assert any('No floor-void targets' in msg for msg in summary['warnings'])

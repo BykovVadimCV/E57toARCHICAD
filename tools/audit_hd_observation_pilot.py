@@ -200,6 +200,27 @@ def summarize(levels: list[dict], expected_scenes: int | None = None) -> dict:
         warnings.append('No architectural positive pixels')
     if aggregate['positive'] and aggregate['positive_kept'] == 0:
         warnings.append('All architectural positive pixels excluded from training')
+    wall = summary['class_retention'].get('wall', {})
+    wall_retained = wall.get('trained_fraction')
+    if summary['positive_training_retention'] is not None and summary['positive_training_retention'] < .35:
+        warnings.append('Low global architectural target retention (<35%): training would be strongly target-starved')
+    if wall_retained is not None and wall_retained < .20:
+        warnings.append('Low wall target retention (<20%): full wall bodies are much wider than observed return strips')
+    passages = by_class.get('passage', {})
+    passage_pixels = passages.get('physical_px', 0)
+    confirmed_px_fraction = _ratio(aggregate['confirmed_passage'], passage_pixels)
+    summary['confirmed_passage_area_fraction'] = confirmed_px_fraction
+    if confirmed_px_fraction is not None and confirmed_px_fraction > .75:
+        warnings.append('Passage ray-confirmed pixels cover >75% of passage area: narrow strips coalesce; inspect per-opening caps')
+    if by_class.get('floor_void', {}).get('physical_px', 0) == 0:
+        warnings.append('No floor-void targets: multi-level / upper slab holes were not tested')
+    # Even a defect-free *diagnostic* synthetic pilot cannot certify that the
+    # dataset will perform on a real E57. Keep this gate explicit.
+    summary['quality_gate'] = {
+        'mask_consistency': 'passed',
+        'approved_for_training': False,
+        'reason': 'diagnostic synthetic pilot; inspect low-positive wall retention and passage area coverage',
+    }
     summary['warnings'] = warnings
     return summary
 
@@ -237,6 +258,10 @@ def audit_roots(roots: list[Path], expected_scenes: int | None = 10,
             all_levels.append(row)
     summary = summarize(all_levels, expected_scenes)
     summary['cohorts'] = integrity
+    summary['cohort_statistics'] = {
+        root.name: summarize([row for row in all_levels if row['cohort'] == root.name], None)
+        for root in roots
+    }
     return summary, all_levels
 
 
@@ -277,6 +302,11 @@ def save_report(summary: dict, levels: list[dict], output_dir: Path) -> None:
     ]
     for k, v in s['class_retention'].items():
         lines.append(f"| {k} | {v['physical_px']} | {v['trained_px']} | {v['trained_fraction']} |")
+    lines += ['', '## Cohorts (must not be confused with production distribution)', '',
+              '| Cohort | Scenes | Positive kept | Wall kept | Passages confirmed |',
+              '|---|---:|---:|---:|---:|']
+    for cohort, c in s.get('cohort_statistics', {}).items():
+        lines.append(f"| {cohort} | {c['scene_count']} | {c['positive_training_retention']} | {c['class_retention']['wall']['trained_fraction']} | {c['metrics']['passage_objects_confirmed']}/{c['metrics']['passage_objects']} |")
     lines += ['', '## Warnings', '']
     lines += [f'- {w}' for w in s['warnings']] if s['warnings'] else ['No structural audit warnings.']
     lines += ['', '## Interpretation limits', '',
@@ -285,7 +315,7 @@ def save_report(summary: dict, levels: list[dict], output_dir: Path) -> None:
         '- An unknown pixel does not prove absence of walls or openings.',
         '- This does not measure network hallucinations, IoU, real E57 accuracy or Archicad export.',
         '- Diagnostic scanner settings are intentionally cheaper than the 0.1° production profile.',
-        '- No training should begin solely on the basis of this pilot.', '']
+        '- **Training approval: NO**, even when data integrity passes.', '']
     (output_dir / 'PILOT_REPORT.md').write_text('\n'.join(lines), encoding='utf-8')
 
 
