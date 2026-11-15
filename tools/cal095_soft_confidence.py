@@ -57,6 +57,8 @@ def features(cells, feature_set):
     if len(set(keys)) != len(keys) or any(len(k) != 5 for k in keys):
         raise ValueError("Invalid/duplicate oracle cell keys")
     by_key = {key: row for key, row in zip(keys, cells)}
+    if not cells:
+        return np.empty((0, {"local": 4, "shape_context": 6, "full_context": 7}[feature_set]))
     out = []
     for key, row in zip(keys, cells):
         shape, mad, macro = (_scalar(row, x) for x in
