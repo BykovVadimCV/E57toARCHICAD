@@ -1,0 +1,95 @@
+name: CAL-09.2 direct-ray ground-truth observability
+
+on:
+  push:
+    branches: [experiment/cal09-2-ray-observability]
+    paths:
+      - 'simscan/scanner.py'
+      - 'simscan/generate.py'
+      - 'tools/cal092_ray_observability.py'
+      - 'tools/validate_cal092_observability.py'
+      - 'tests/test_cal092_observability.py'
+      - '.github/workflows/cal092-observability.yml'
+  pull_request:
+    paths:
+      - 'simscan/scanner.py'
+      - 'simscan/generate.py'
+      - 'tools/cal092_ray_observability.py'
+      - 'tools/validate_cal092_observability.py'
+      - 'tests/test_cal092_observability.py'
+      - '.github/workflows/cal092-observability.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cal092-provenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install scanner and analysis dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgl1 libglib2.0-0 libegl1 libopengl0
+          python -m pip install 'numpy>=1.26,<3' 'scipy>=1.11' 'PyYAML>=6,<7' 'shapely>=2' 'opencv-python-headless>=4.8' 'pye57>=0.4' 'open3d>=0.18,<0.21' 'pytest>=8,<10'
+      - name: Regression tests CAL-07 through CAL-09.2
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+        run: |
+          python -m pytest -q \
+            tests/test_cal07_spatial_tail.py \
+            tests/test_cal08_tail_zones.py \
+            tests/test_cal09_two_scale_defects.py \
+            tests/test_cal091_mesh_truth.py \
+            tests/test_cal091_protocol.py \
+            tests/test_cal092_observability.py \
+            tests/test_scanner.py \
+            tests/test_generator_contract_v5.py
+      - name: Smoke one physical wall pair through the actual raycaster
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+          OPEN3D_CPU_RENDERING: 'true'
+        run: |
+          python tools/validate_cal092_observability.py \
+            --out /tmp/cal092_ci \
+            --seeds 46101 \
+            --variants uniform_2_4 zone18_fine35 \
+            --resolutions 0.30 \
+            --angular-step-deg 0.50 --max-sample 20000
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('/tmp/cal092_ci/cal092_results.json').read_text())
+          assert d['format']=='cal092-direct-ray-observability-v1'
+          assert len(d['cases'])==2
+          assert d['checks']['matched_layouts_and_station_counts']
+          assert d['checks']['four_paired_ablations_per_case']
+          assert d['checks']['sampled_direct_ray_provenance_valid']
+          assert not d['checks']['complete_canonical_design']
+          assert d['auto_update_production_config'] is False
+          print('CAL-09.2 paired scanner smoke:', d['checks'])
+          for key,value in d['grouped'].items():
+              print(key, value)
+          PY
+      - name: Upload aggregate-only smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cal092-ray-observability-smoke
+          path: |
+            /tmp/cal092_ci/cal092_results.json
+            /tmp/cal092_ci/CAL092_REPORT.md
+            /tmp/cal092_ci/cal092_progress.json
+          retention-days: 14
+          if-no-files-found: warn
