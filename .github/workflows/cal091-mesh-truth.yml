@@ -74,3 +74,49 @@ jobs:
             /tmp/cal091_smoke/cal091_progress.json
           if-no-files-found: warn
           retention-days: 14
+
+  full-mesh-truth:
+    needs: mesh-truth-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install mesh and generator dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgl1 libglib2.0-0 libegl1 libopengl0
+          python -m pip install 'numpy>=1.26,<3' 'scipy>=1.11' 'PyYAML>=6,<7' 'shapely>=2' 'opencv-python-headless>=4.8' 'pye57>=0.4' 'open3d>=0.18,<0.21' 'pytest>=8,<10'
+      - name: Run all 120 paired CAL-09.1 wall meshes
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+          OPEN3D_CPU_RENDERING: 'true'
+        run: |
+          python tools/validate_cal091_ground_truth.py --out /tmp/cal091_full --save-truth one
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path('/tmp/cal091_full/cal091_results.json').read_text())
+          assert d['format'] == 'cal091-ground-truth-spatial-validation-v1'
+          assert len(d['scene_metrics']) == 120
+          assert d['auto_update_production_config'] is False
+          print('CAL-09.1 diagnostic decision:', d['decision'])
+          print('Algorithmic gates:', d['checks'])
+          PY
+      - name: Upload full ground-truth metrics and example truth mesh
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cal091-full-120-mesh-results
+          path: |
+            /tmp/cal091_full/cal091_results.json
+            /tmp/cal091_full/CAL091_REPORT.md
+            /tmp/cal091_full/cal091_progress.json
+            /tmp/cal091_full/mesh_truth/*.npz
+          if-no-files-found: warn
+          retention-days: 30
