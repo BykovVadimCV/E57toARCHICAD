@@ -4,7 +4,7 @@ This is a **diagnostic experiment**, not physical scanner calibration and not
 an acceptance of CAL-09's failed registered-E57 patch criteria.
 
 CAL-09 (uploaded Colab result: 40/40 scans, 30/30 regression tests) returned
-\`NO_CAL09_VARIANT_PASSED\`. Highest reported median p90 values were 3.56mm
+`NO_CAL09_VARIANT_PASSED`. Highest reported median p90 values were 3.56mm
 (zone08/fine35) and 3.34mm (zone18/fine35); no variant met the four-of-eight
 connected-patch gate. Those outcomes remain unchanged.
 
@@ -12,26 +12,26 @@ connected-patch gate. Those outcomes remain unchanged.
 
 Run from the repository root, on this branch:
 
-\`\`\`bash
+```bash
 python -m pip install -r requirements.txt
 python -m pytest -q tests/test_cal091_mesh_truth.py tests/test_cal09_two_scale_defects.py \
     tests/test_cal08_tail_zones.py tests/test_cal07_spatial_tail.py
 PYTHONPATH=. python tools/validate_cal091_ground_truth.py \
     --out results/CAL091 --save-truth one
-\`\`\`
+```
 
 The full experiment contains **8 CAL-09 seeds × 5 variants × 3 wall tessellation
 resolutions (0.30, 0.15, 0.10m)**. It **does not simulate scanner rays**. The
 initial layout and wall thickness jitter are regenerated with the same scene
 RNG for each pair. Only wall geometry is extracted from the actual
-\`SceneBuilder\` / \`SceneMesh\` classes, keeping scanner calibration fixed.
+`SceneBuilder` / `SceneMesh` classes, keeping scanner calibration fixed.
 
 Completed seed-variant-resolution rows are cached with an SHA-256 of the source
 YAML. Re-running the same command resumes completed work; changing the source
 YAML invalidates cached records. Results are written to
-\`cal091_results.json\`, \`CAL091_REPORT.md\`, and
-\`cal091_progress.json\`. The default \`--save-truth one\` saves an example
-\`mesh_truth/*.npz\` for the first seed and finest resolution.
+`cal091_results.json`, `CAL091_REPORT.md`, and
+`cal091_progress.json`. The default `--save-truth one` saves an example
+`mesh_truth/*.npz` for the first seed and finest resolution.
 
 ## Ground-truth definition
 
@@ -44,13 +44,13 @@ YAML invalidates cached records. Results are written to
   within a common wall instance. Adjacency requires a whole shared edge
   rather than a single vertex.
 - Report component count, largest component area, fraction of area in the
-  largest component, fragmentation \`1 - largest_area / defect_area\`, and
+  largest component, fragmentation `1 - largest_area / defect_area`, and
   equivalent circular diameter. The diameter is an *area-derived equivalent*,
   not the true maximum linear extent.
 - Report distance-binned normalized pair correlations for coarse envelope
   and masked fine texture, with null for poorly sampled distance bins.
 - Compute *paired additive residual* as displacement with CAL-09 minus
-  displacement with tail probability zero using the same \`w\`, phases and
+  displacement with tail probability zero using the same `w`, phases and
   lean. Report RMS of the residual outside the envelope's exact support.
 
 The truth mask is an **interpolated mesh-envelope mask**, and hence can vary
