@@ -29,13 +29,13 @@ def _mean(values):
     return round(float(np.mean(values)), 6) if values else None
 
 
-def aggregate(paths, phase):
+def aggregate(paths, phase, expected_fingerprint=None):
     if phase not in ("development", "holdout"):
         raise ValueError("phase must be development or holdout")
     expected_seeds = DEV_SEEDS if phase == "development" else HOLDOUT_SEEDS
     if len(paths) != len(expected_seeds):
         raise ValueError("Expected one shard for each predeclared phase seed")
-    cases, fingerprints, config_hashes, seen = [], set(), set(), []
+    cases, fingerprints, config_hashes, detector_hashes, validator_hashes, seen = [], set(), set(), set(), set(), []
     for path in paths:
         doc = json.loads(Path(path).read_text(encoding="utf-8"))
         if doc.get("format") != SHARD_FORMAT or doc.get("auto_update_production_config") is not False:
@@ -55,10 +55,16 @@ def aggregate(paths, phase):
         seen.append(doc["seed"])
         fingerprints.add(doc["run_fingerprint"])
         config_hashes.add(doc["source_config_sha256"])
+        detector_hashes.add(doc.get("detector_sha256"))
+        validator_hashes.add(doc.get("validator_sha256"))
         cases.extend(doc["cases"])
     if (set(seen) != set(expected_seeds) or len(set(seen)) != len(seen) or
-            len(fingerprints) != 1 or len(config_hashes) != 1):
-        raise ValueError("Missing/duplicate seed or mixed run/config fingerprint")
+            len(fingerprints) != 1 or len(config_hashes) != 1 or
+            len(detector_hashes) != 1 or None in detector_hashes or
+            len(validator_hashes) != 1 or None in validator_hashes):
+        raise ValueError("Missing/duplicate seed or mixed run/config/source fingerprint")
+    if expected_fingerprint is not None and next(iter(fingerprints)) != expected_fingerprint:
+        raise ValueError("Holdout fingerprint differs from the frozen development run")
     for seed in expected_seeds:
         group = [c for c in cases if c["seed"] == seed]
         if len({c["layout_station_signature"] for c in group}) != 1:
@@ -109,6 +115,8 @@ def aggregate(paths, phase):
         "max_points": 200_000,
         "detector_receives_only_xyz": True,
         "source_config_sha256": next(iter(config_hashes)),
+        "detector_sha256": next(iter(detector_hashes)),
+        "validator_sha256": next(iter(validator_hashes)),
         "run_fingerprint": next(iter(fingerprints)),
         "case_count": len(cases),
         "summary_mean_of_seed_means": summary,
@@ -175,10 +183,12 @@ def markdown(doc):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--phase", choices=("development", "holdout"), required=True)
+    p.add_argument("--expected-fingerprint", default=None,
+                   help="Required frozen development fingerprint when evaluating holdout")
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("shards", type=Path, nargs="+")
     args = p.parse_args()
-    result = aggregate(args.shards, args.phase)
+    result = aggregate(args.shards, args.phase, args.expected_fingerprint)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / f"cal096_{args.phase}.json").write_text(
         json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False),
