@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy.ndimage import binary_closing, label as connected_components
+from scipy.spatial import cKDTree
 
 FORMAT = "cal096-blind-xyz-wall-topology-v1"
 
@@ -25,6 +26,11 @@ DEFAULTS = {
     "max_points": 200_000,
     "ransac_iterations": 256,
     "max_failed_plane_rounds": 3,
+    "normal_neighbors": 20,
+    "normal_planarity_ratio": 0.35,
+    "normal_min_tangent_variance_m2": 0.0004,
+    "normal_vertical_max_deg": 22.0,
+    "normal_alignment_max_deg": 25.0,
     "ransac_sample_points": 16_000,
     "max_planes": 48,
     "plane_tolerance_m": 0.040,
@@ -91,19 +97,51 @@ def voxel_sample(xyz, *, voxel_m=0.025, max_points=200_000):
     return points[source].copy(), source.astype(np.int64, copy=False)
 
 
-def _ransac_plane(points, active_ids, rng, cfg):
-    """Propose a vertical plane n.x+b=0 using measured XY only."""
-    if len(active_ids) < cfg["min_plane_support"]:
+def _estimate_vertical_normals(points, cfg):
+    """Local PCA normals from XYZ only; no labels, instances or plan priors."""
+    xyz = np.asarray(points, dtype=np.float64)
+    if len(xyz) < 6:
+        return np.zeros_like(xyz), np.zeros(len(xyz), dtype=bool), np.zeros(len(xyz), bool)
+    k = min(int(cfg["normal_neighbors"]), len(xyz))
+    _, indices = cKDTree(xyz).query(xyz, k=k, workers=1)
+    neighbours = xyz[indices]
+    centered = neighbours - neighbours.mean(axis=1, keepdims=True)
+    covariance = np.einsum("nki,nkj->nij", centered, centered) / float(k)
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    normals = eigenvectors[:, :, 0]
+    tangent_variance = eigenvalues[:, 1]
+    ratio = eigenvalues[:, 0] / np.maximum(tangent_variance, 1e-12)
+    vertical = np.abs(normals[:, 2]) <= math.sin(
+        math.radians(float(cfg["normal_vertical_max_deg"])))
+    planar = ((ratio <= float(cfg["normal_planarity_ratio"])) &
+              (tangent_variance >= float(cfg["normal_min_tangent_variance_m2"])))
+    return normals, vertical, vertical & planar
+
+
+def _ransac_plane(points, active_ids, rng, cfg, normals=None,
+                  normal_candidates=None):
+    """Propose a vertical plane from locally planar, normal-consistent XYZ."""
+    if normal_candidates is None:
+        candidate_ids = active_ids
+    else:
+        candidate_ids = active_ids[normal_candidates[active_ids]]
+    if len(candidate_ids) < cfg["min_plane_support"]:
         return None
-    take = min(len(active_ids), cfg["ransac_sample_points"])
-    local = rng.choice(active_ids, size=take, replace=False)
+    take = min(len(candidate_ids), cfg["ransac_sample_points"])
+    local = rng.choice(candidate_ids, size=take, replace=False)
     sample = points[local]
     xy = sample[:, :2]
+    sample_normals = normals[local, :2] if normals is not None else None
     best = None
+    align_cos = math.cos(math.radians(float(cfg["normal_alignment_max_deg"])))
     for _ in range(cfg["ransac_iterations"]):
         a, b = rng.integers(0, take, size=2)
         if a == b:
             continue
+        if sample_normals is not None:
+            pair_agreement = abs(float(sample_normals[a] @ sample_normals[b]))
+            if pair_agreement < align_cos:
+                continue
         delta = xy[b] - xy[a]
         baseline = float(np.linalg.norm(delta))
         if baseline < cfg["min_pair_baseline_m"]:
@@ -112,14 +150,21 @@ def _ransac_plane(points, active_ids, rng, cfg):
         normal = np.array([-tangent[1], tangent[0]])
         if normal[0] < 0 or (abs(normal[0]) <= 1e-12 and normal[1] < 0):
             normal = -normal
+        if sample_normals is not None:
+            if (abs(float(sample_normals[a] @ normal)) < align_cos or
+                    abs(float(sample_normals[b] @ normal)) < align_cos):
+                continue
         bias = -float(normal @ xy[a])
-        residual = np.abs(xy @ normal + bias)
+        residual = np.abs(points[candidate_ids, :2] @ normal + bias)
         inside = residual <= cfg["plane_tolerance_m"]
+        if normals is not None:
+            aligned = np.abs(normals[candidate_ids, :2] @ normal) >= align_cos
+            inside &= aligned
         count = int(inside.sum())
         if count < cfg["min_plane_support"]:
             continue
-        projected = xy[inside] @ tangent
-        z = sample[inside, 2]
+        projected = points[candidate_ids[inside], :2] @ tangent
+        z = points[candidate_ids[inside], 2]
         span_s = float(np.quantile(projected, .95) - np.quantile(projected, .05))
         span_z = float(np.quantile(z, .95) - np.quantile(z, .05))
         if span_s < cfg["min_wall_length_m"] or span_z < cfg["min_wall_height_m"]:
@@ -130,10 +175,22 @@ def _ransac_plane(points, active_ids, rng, cfg):
     return best
 
 
-def _refine_plane(points, active_ids, initial_normal, initial_bias, tolerance):
-    xy = points[active_ids, :2]
+def _refine_plane(points, active_ids, initial_normal, initial_bias, tolerance,
+                  normals=None, normal_candidates=None, cfg=None):
+    """Robust TLS refinement on locally planar, aligned observed returns."""
+    if normal_candidates is not None:
+        fit_ids = active_ids[normal_candidates[active_ids]]
+    else:
+        fit_ids = active_ids
+    if len(fit_ids) < 3:
+        return None
+    xy = points[fit_ids, :2]
+    align_cos = (math.cos(math.radians(float(cfg["normal_alignment_max_deg"])))
+                 if cfg is not None else None)
     residual = np.abs(xy @ initial_normal + initial_bias)
     selected = residual <= tolerance
+    if normals is not None:
+        selected &= np.abs(normals[fit_ids, :2] @ initial_normal) >= align_cos
     if int(selected.sum()) < 3:
         return None
     for _ in range(5):
@@ -149,6 +206,8 @@ def _refine_plane(points, active_ids, initial_normal, initial_bias, tolerance):
         scale = 1.4826 * float(np.median(np.abs(current - med)))
         cutoff = min(tolerance, max(0.012, med + 3.5 * scale))
         updated = residual <= cutoff
+        if normals is not None:
+            updated &= np.abs(normals[fit_ids, :2] @ normal) >= align_cos
         if int(updated.sum()) < 3:
             break
         if np.array_equal(updated, selected):
@@ -157,12 +216,7 @@ def _refine_plane(points, active_ids, initial_normal, initial_bias, tolerance):
         selected = updated
     normal = _canonical_normal(normal)
     bias = -float(normal @ center)
-    residual = np.abs(xy @ normal + bias)
-    selected = residual <= tolerance
-    ids = active_ids[selected]
-    if len(ids) < 3:
-        return None
-    return normal, bias, ids, residual[selected]
+    return normal, bias, fit_ids[selected], np.abs(xy[selected] @ normal + bias)
 
 
 def _component_segments(points, source_indices, plane_id, normal, bias,
@@ -393,11 +447,14 @@ def extract_wall_geometry(xyz, *, config=None, seed=9606):
         return {
             "format": FORMAT, "input_point_count": int(len(xyz)),
             "sampled_point_count": int(len(points)), "sampled_source_indices": source_indices.tolist(),
+            "normal_candidate_count": 0,
             "segments": [], "topology": infer_topology([], cfg),
             "rejected_planes": [], "decision": "INSUFFICIENT_XYZ_SUPPORT",
             "detector_inputs": ["cartesianX", "cartesianY", "cartesianZ"],
             "uses_ground_truth": False,
         }
+    normals, normal_vertical, normal_candidates = _estimate_vertical_normals(points, cfg)
+    candidate_count = int(normal_candidates.sum())
     rng = np.random.default_rng(seed)
     active = np.ones(len(points), dtype=bool)
     segments, rejected = [], []
@@ -407,7 +464,8 @@ def extract_wall_geometry(xyz, *, config=None, seed=9606):
         active_ids = np.flatnonzero(active)
         if len(active_ids) < cfg["min_plane_support"]:
             break
-        proposal = _ransac_plane(points, active_ids, rng, cfg)
+        proposal = _ransac_plane(points, active_ids, rng, cfg,
+                                 normals=normals, normal_candidates=normal_candidates)
         if proposal is None:
             failed_rounds += 1
             if failed_rounds >= cfg["max_failed_plane_rounds"]:
@@ -415,13 +473,22 @@ def extract_wall_geometry(xyz, *, config=None, seed=9606):
             continue
         _, initial_normal, initial_bias = proposal
         refined = _refine_plane(points, active_ids, initial_normal,
-                                initial_bias, cfg["plane_tolerance_m"])
+                                initial_bias, cfg["plane_tolerance_m"],
+                                normals=normals, normal_candidates=normal_candidates,
+                                cfg=cfg)
         if refined is None:
             failed_rounds += 1
             if failed_rounds >= cfg["max_failed_plane_rounds"]:
                 break
             continue
-        normal, bias, inliers, residuals = refined
+        normal, bias, fit_inliers, fit_residuals = refined
+        active_fit = active_ids[normal_vertical[active_ids]]
+        final_residual = np.abs(points[active_fit, :2] @ normal + bias)
+        align_cos = math.cos(math.radians(float(cfg["normal_alignment_max_deg"])))
+        final_aligned = np.abs(normals[active_fit, :2] @ normal) >= align_cos
+        final_keep = (final_residual <= cfg["plane_tolerance_m"]) & final_aligned
+        inliers = active_fit[final_keep]
+        residuals = final_residual[final_keep]
         if len(inliers) < cfg["min_plane_support"]:
             failed_rounds += 1
             if failed_rounds >= cfg["max_failed_plane_rounds"]:
@@ -461,6 +528,7 @@ def extract_wall_geometry(xyz, *, config=None, seed=9606):
         "format": FORMAT,
         "input_point_count": int(len(xyz)),
         "sampled_point_count": int(len(points)),
+        "normal_candidate_count": candidate_count,
         "sampled_source_indices": source_indices.astype(np.int64).tolist(),
         "segments": segments,
         "topology": topology,
