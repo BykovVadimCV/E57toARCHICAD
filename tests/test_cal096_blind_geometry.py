@@ -66,6 +66,28 @@ def test_blind_detector_api_accepts_only_xyz_and_has_no_gt_dependency():
         extract_wall_geometry(np.zeros((10, 3)), labels=np.zeros(10))
 
 
+def test_local_pca_normals_prioritize_vertical_planar_xyz():
+    import tools.cal096_blind_geometry as blind
+
+    wall = _face("y", 0., 0., 5., seed=81)
+    rng = np.random.default_rng(82)
+    clutter = np.column_stack((
+        rng.uniform(-.2, 5.2, 2500),
+        rng.uniform(-.2, 5.2, 2500),
+        rng.uniform(0., 2.8, 2500),
+    ))
+    points = np.vstack((wall, clutter))
+    normals, vertical, candidates = blind._estimate_vertical_normals(
+        points, DEFAULTS)
+    assert normals.shape == points.shape
+    assert np.count_nonzero(candidates) > 0.5 * len(wall)
+    assert np.count_nonzero(candidates) < len(points)
+    assert np.all(np.abs(normals[candidates, 2]) <=
+                  np.sin(np.radians(DEFAULTS["normal_vertical_max_deg"])) + 1e-9)
+    assert np.all(vertical[candidates])
+
+
+
 def test_extracts_vertical_wall_planes_and_rejects_short_clutter():
     result = extract_wall_geometry(_room_cloud(), seed=11)
     candidates = [s for s in result["segments"] if s["wall_candidate"]]
