@@ -201,3 +201,59 @@ materially improve the result. The current branch therefore adds local PCA
 normal/planarity guidance before any holdout run. The 611xx holdout remains
 untouched and will not run until the new development metrics are reviewed and
 the detector/evaluator fingerprints are frozen.
+
+
+## Final development results and stop decision
+
+Three detector variants were evaluated on the same 12 development scenes
+(60101, 60102, 60105, 60106 × three geometry variants). All runs used
+0.10m mesh and 0.1° scanner step. All 80 regression tests and the real
+synthetic-raycaster smoke passed for the final soft-normal implementation.
+
+| Detector variant | Point precision | Point recall | Point FPR | Wall-instance recall | Topology edge recall |
+|---|---:|---:|---:|---:|---:|
+| Initial blind RANSAC | 88.7% | 53.8% | 12.1% | 50.0% | 26.0% |
+| Hard local-PCA normal gate | 92.9% | 48.3% | 8.5% | 47.2% | 11.5% |
+| Soft PCA-guided RANSAC (current) | 89.6% | 53.0% | 10.7% | 50.0% | 12.5% |
+
+The retry-only RANSAC change did not materially change the initial
+baseline. The hard PCA gate improved precision/FPR but removed too many
+true returns and topology edges. Soft PCA weighting recovered some recall
+but did not improve wall or topology recall enough.
+
+Current soft-PCA per-seed results show severe instability:
+- 60101: recall 34.8%, wall-instance recall 16.7%, no predicted topology edges.
+- 60102: recall 29.8%, wall-instance recall 33.3%, edge recall 12.5%.
+- 60105: recall 71.7%, wall-instance recall 83.3%, edge recall 0%.
+- 60106: recall 75.7%, FPR 31.2%, wall-instance recall 66.7%, edge recall 37.5%.
+
+**Decision: CAL096_DEVELOPMENT_NOT_ESTABLISHED.** The untouched 611xx
+holdout is deliberately NOT run. Preregistered holdout targets are
+precision >=90%, recall >=70%, FPR <=10%, worst-seed FPR <=15%,
+wall-instance recall >=80%, topology edge precision >=80%,
+topology edge recall >=70% and edge-type accuracy >=80%.
+Development mean recall 53.0%, worst-seed FPR 31.2%, wall recall 50.0%
+and topology recall 12.5% are too far from the gates to justify spending
+the independent holdout.
+
+### Reproducible completed runs
+
+- Initial blind RANSAC + retry diagnostic:
+  https://github.com/BykovVadimCV/E57toARCHICAD/actions/runs/43805836292/artifacts/14198916538
+- Hard PCA gate diagnostic:
+  https://github.com/BykovVadimCV/E57toARCHICAD/actions/runs/43806738652/artifacts/14199375094
+- Soft PCA-guided RANSAC (current):
+  https://github.com/BykovVadimCV/E57toARCHICAD/actions/runs/43807487073/artifacts/14199825047
+
+The CI pipeline is technically green; that is not detector acceptance.
+The current branch remains Draft and no production files were changed.
+
+### What this means for the next stage
+
+Do not continue threshold/parameter tuning on 601xx indefinitely. CAL-09.7
+must move to real E57 geometry with independently surveyed wall surfaces,
+wall junctions and openings. The repository contains no real E57 point-cloud
+dataset or independent surveyed wall truth, so a real-world acceptance
+experiment cannot be completed from repository fixtures alone. Request
+representative E57 files and independent wall annotations before making
+any production claim.
