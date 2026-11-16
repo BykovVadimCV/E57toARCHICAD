@@ -1,0 +1,164 @@
+name: CAL-09.6 blind XYZ wall geometry development
+
+on:
+  push:
+    branches: [experiment/cal09-6-blind-wall-topology]
+    paths:
+      - 'tools/cal096_blind_geometry.py'
+      - 'tools/validate_cal096_blind_geometry.py'
+      - 'tools/aggregate_cal096.py'
+      - 'tests/test_cal096_blind_geometry.py'
+      - '.github/workflows/cal096-development.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cal096-regression-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install scanner dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgl1 libglib2.0-0 libegl1 libopengl0
+          python -m pip install \
+            'numpy>=2.0,<3' 'scipy>=1.11' 'shapely>=2,<3' \
+            'open3d>=0.18,<0.21' 'pye57>=0.4.10' \
+            'opencv-python-headless>=4.8' 'pyyaml>=6' 'pillow>=10' \
+            'pytest>=8,<10' 'matplotlib>=3.8'
+      - name: CAL-09.1 through CAL-09.6 and wall regressions
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+        run: |
+          python -m pytest -q \
+            tests/test_cal091_mesh_truth.py \
+            tests/test_cal091_protocol.py \
+            tests/test_cal092_observability.py \
+            tests/test_cal093_multiscale.py \
+            tests/test_cal094_spatial.py \
+            tests/test_cal095_soft_confidence.py \
+            tests/test_cal096_blind_geometry.py \
+            tests/test_wall_pipeline.py \
+            tests/test_wall_runs.py \
+            tests/test_wall_face_alignment.py \
+            tests/test_cloudsnap.py \
+            tests/test_e57read.py
+      - name: Actual synthetic scanner XYZ smoke with no truth passed to detector
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+          OPEN3D_CPU_RENDERING: 'true'
+        run: |
+          python -u tools/validate_cal096_blind_geometry.py \
+            --out /tmp/cal096_smoke --seed 60101 \
+            --variants uniform_2_4 zone18_fine35 \
+            --angular-step-deg 0.50 --max-points 50000
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('/tmp/cal096_smoke/cal096_seed_60101.json')
+          x=json.loads(p.read_text())
+          assert x['n_cases']==2
+          assert all(c['detector_uses_ground_truth'] is False for c in x['cases'])
+          assert all(c['detector_inputs']==['cartesianX','cartesianY','cartesianZ'] for c in x['cases'])
+          assert all(c['sampled_xyz_points']>0 for c in x['cases'])
+          print('CAL-09.6 synthetic scanner XYZ smoke: PASS')
+          PY
+      - name: Upload smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cal096-xyz-smoke
+          path: /tmp/cal096_smoke/cal096_seed_60101.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  cal096-development-seed:
+    needs: cal096-regression-and-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        seed: [60101, 60102, 60105, 60106]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install scanner dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgl1 libglib2.0-0 libegl1 libopengl0
+          python -m pip install \
+            'numpy>=2.0,<3' 'scipy>=1.11' 'shapely>=2,<3' \
+            'open3d>=0.18,<0.21' 'pye57>=0.4.10' \
+            'opencv-python-headless>=4.8' 'pyyaml>=6' 'pillow>=10'
+      - name: Three fresh full scanner variants, blind XYZ detector
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+          OPEN3D_CPU_RENDERING: 'true'
+        run: |
+          python -u tools/validate_cal096_blind_geometry.py \
+            --out /tmp/cal096_seed_${{ matrix.seed }} \
+            --seed ${{ matrix.seed }} \
+            --angular-step-deg 0.10 --max-points 200000
+      - name: Upload development seed shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cal096-development-seed-${{ matrix.seed }}
+          path: /tmp/cal096_seed_${{ matrix.seed }}/cal096_seed_${{ matrix.seed }}.json
+          retention-days: 30
+          if-no-files-found: warn
+
+  cal096-development-aggregate:
+    needs: cal096-development-seed
+    if: ${{ needs.cal096-development-seed.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install analysis dependencies
+        run: python -m pip install 'numpy>=2.0,<3' 'scipy>=1.11' 'shapely>=2,<3'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cal096-development-seed-*
+          path: /tmp/cal096_dev_shards
+      - name: Aggregate development only; no 611xx holdout is run
+        env:
+          PYTHONPATH: .:tools
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
+        run: |
+          python -u tools/aggregate_cal096.py \
+            --phase development --out /tmp/cal096_dev_final \
+            /tmp/cal096_dev_shards/cal096-development-seed-*/cal096_seed_*.json
+      - name: Upload frozen development report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cal096-development-final
+          path: |
+            /tmp/cal096_dev_final/cal096_development.json
+            /tmp/cal096_dev_final/CAL096_DEVELOPMENT_REPORT.md
+          retention-days: 30
+          if-no-files-found: error

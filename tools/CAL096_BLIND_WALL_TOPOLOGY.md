@@ -1,0 +1,259 @@
+# CAL-09.6: blind wall geometry and neighbour topology from XYZ
+
+**Scope:** infer vertical planar wall candidates and their corner, T-junction and
+collinear-gap relationships directly from measured XYZ. This stage is not a
+snow/defect classifier and does not change the production wall pipeline.
+
+## Why this stage exists
+
+CAL-09.4's hard connected-component filter and CAL-09.5's soft score both
+operated on synthetic physical cells whose wall/face/cell association was
+supplied by the truth mesh. CAL-09.5's untouched 511xx holdout did not establish
+the required recall/FPR trade-off. More oracle-cell threshold tuning is stopped.
+
+CAL-09.6 removes that association from the detector itself. The detector API is
+extract_wall_geometry(xyz) and accepts exactly one positional measurement
+array with shape (N,3). It cannot receive wall IDs, triangle IDs, labels,
+station IDs, poses, a plan, a layout, or synthetic truth.
+
+## Blind inference implementation
+
+tools/cal096_blind_geometry.py implements a deterministic, geometry-only
+baseline:
+
+1. Reject non-finite returns; voxel-thin to 25mm representatives, capped at
+   200,000 points. Preserve a source-index map for evaluation and E57 traceability.
+2. Estimate local 3D PCA normals from the 20 nearest XYZ neighbours. A
+   proposal pool uses near-vertical normals (within 22° of horizontal),
+   planarity ratio <=0.35 and tangent variance >=0.0004m². If that pool is too
+   small, proposal sampling falls back to all active XYZ points.
+3. Propose vertical planes with seeded RANSAC in XY (256 hypotheses over up to
+   16,000 proposal points). Pair-normal agreement and plane-normal alignment
+   are checked within 30°. The inlier count is weighted by a soft normal
+   alignment factor (weight 0.35), rather than hard-rejecting every return
+   with an uncertain local normal. A candidate needs long horizontal support
+   and at least 1.8m vertical extent. Up to three independent proposal rounds
+   are allowed after a stochastic miss; the search stops after three
+   consecutive failures.
+4. Refine the line by robust total least squares and a fixed 40mm inlier bound,
+   using the locally planar proposal pool where it has sufficient support.
+   Final predicted returns are all active XYZ points within the geometric
+   plane bound, so local normal uncertainty does not itself discard a point.
+5. Project inliers to along-wall distance and height. Split disconnected
+   components on an 80mm occupancy grid with one 8-connected closing pass.
+6. Keep wall candidates only when fixed support, length, height, density,
+   occupancy and plane-residual gates pass.
+6. Infer graph edges from segment geometry alone:
+   - corner: both finite segments reach the same perpendicular line intersection within the fixed junction tolerance;
+   - tee: one segment end reaches the interior of a perpendicular segment at their line intersection;
+   - collinear_gap: parallel, near-coincident segments separated by at most
+     250mm with sufficient shared height.
+7. Report parallel offset faces separately as ambiguous parallel_face_candidate
+   hypotheses. They are not automatically merged into one wall or one graph edge.
+
+The fixed parameter set is embedded in DEFAULTS and written to each case
+report. There is no trained model or threshold selection in CAL-09.6. Any
+parameter change after viewing development metrics requires rerunning the
+development phase; holdout is not to be inspected until the detector is frozen.
+
+## E57 input path
+
+The same module provides a streaming E57Reader adapter. It reads Cartesian
+XYZ from every scan, applies each E57 scan pose, removes non-finite and invalid
+returns, and uses a bounded deterministic reservoir if the file exceeds the
+input budget. It discards intensity, colour, station IDs and all semantic data.
+Example:
+
+    PYTHONPATH=. python tools/cal096_blind_geometry.py customer.e57 \
+      --out /tmp/customer_blind_geometry.json
+
+The repository currently contains no real .e57, .las, .laz, .ply or .pcd
+point-cloud dataset. The E57 path can be unit-tested with generated E57,
+but a customer-data acceptance result cannot be produced from repository
+fixtures alone.
+
+## Synthetic scanner evaluation, with a strict information boundary
+
+The experiment generator reuses the existing scene and scanner implementation
+with 0.10m mesh tessellation, 0.1-degree angular step and the three fixed CAL-09
+geometry variants (uniform_2_4, zone08_fine35, zone18_fine35).
+
+For each scene, all valid scanner returns are transformed using the written
+station poses and concatenated. Mixed returns, virtual returns, furniture and
+other clutter are not removed by semantic labels. Only the XYZ array is passed
+to extract_wall_geometry.
+
+A separate evaluation function, called only after inference, receives
+synthetic point labels/instances and layout wall axes. It computes:
+- point precision, recall, FPR and F1 on the same deterministic voxel sample;
+- candidate-segment precision and visible wall-instance recall;
+- topology edge precision/recall/F1 and edge-type accuracy against visible
+  synthetic layout-wall relationships.
+
+The evaluator's synthetic wall-instance mapping follows SceneBuilder's
+wall creation order. This is evaluation-only; the detector never receives
+or uses this mapping. The experiment records detector_uses_ground_truth=false
+and the exact XYZ-only input contract in every case.
+
+## Preregistered seeds and split
+
+Previously observed CAL-09 seeds (461xx through 511xx) are not reused.
+
+- Development: **60101, 60102, 60105, 60106**.
+- Untouched holdout: **61101, 61102, 61105, 61106**.
+- Three geometry variants per seed.
+- 0.10m tessellation, 0.1° scanner, 200,000-point detector cap.
+- 24 full scanner scenes total, split into two phases of 12 scenes each.
+
+Development runs first. Inspect only 601xx metrics, fix bugs or tune the fixed
+geometry parameters if necessary, and rerun development until the detector is
+frozen. The 611xx holdout workflow is added/run only after the final detector
+and evaluator source hashes are recorded. The holdout aggregator rejects a
+fingerprint that differs from the frozen development fingerprint.
+
+## Holdout engineering gates
+
+All gates must pass on the untouched 611xx holdout, using the mean of four
+seed-level means across three variants. Worst-seed point FPR is also checked.
+
+| Metric | Required |
+|---|---:|
+| Point-level precision | >= 0.90 |
+| Point-level recall | >= 0.70 |
+| Point-level FPR | <= 0.10 |
+| Worst seed point-level FPR | <= 0.15 |
+| Visible wall-instance recall | >= 0.80 |
+| Topology edge precision | >= 0.80 |
+| Topology edge recall | >= 0.70 |
+| Topology edge-type accuracy | >= 0.80 |
+
+A PASS is only a synthetic blind-geometry engineering diagnostic. It does
+not establish defect detection quality, robustness to all real E57 scans, or
+production readiness. A FAIL stops promotion; do not retune against 611xx.
+
+## Reproduction
+
+Targeted tests:
+
+    PYTHONPATH=. python -m pytest -q tests/test_cal096_blind_geometry.py
+
+Small raycaster smoke:
+
+    PYTHONPATH=. python tools/validate_cal096_blind_geometry.py \
+      --out /tmp/CAL096_smoke --seed 60101 \
+      --variants uniform_2_4 zone18_fine35 \
+      --angular-step-deg 0.50 --max-points 50000
+
+Full one-seed development shard:
+
+    PYTHONPATH=. python tools/validate_cal096_blind_geometry.py \
+      --out results/CAL096_dev --seed 60101 \
+      --angular-step-deg 0.10 --max-points 200000
+
+Aggregate four development shards:
+
+    PYTHONPATH=. python tools/aggregate_cal096.py \
+      --phase development --out results/CAL096_dev_final \
+      /path/cal096_seed_60101.json /path/cal096_seed_60102.json \
+      /path/cal096_seed_60105.json /path/cal096_seed_60106.json
+
+Holdout aggregation requires the exact frozen development fingerprint:
+
+    PYTHONPATH=. python tools/aggregate_cal096.py \
+      --phase holdout --expected-fingerprint FROZEN_DEV_FINGERPRINT \
+      --out results/CAL096_holdout_final \
+      /path/cal096_seed_61101.json /path/cal096_seed_61102.json \
+      /path/cal096_seed_61105.json /path/cal096_seed_61106.json
+
+The per-seed cache fingerprint includes source YAML SHA-256, detector source
+SHA-256, evaluator source SHA-256, mesh resolution, scanner angular step and
+point budget. A code change invalidates cached scenes.
+
+## Known limits / what CAL-09.7 still needs
+
+- This is a vertical-plane baseline; curved, strongly sloped or heavily
+  occluded wall faces are not yet reconstructed.
+- A flush cabinet or other coplanar object can be indistinguishable from a
+  wall using XYZ alone. Additional context or semantic evidence is required.
+- One 80mm occupancy closing pass can bridge small holes but deliberately does
+  not close door-sized gaps. It is not a substitute for opening recognition.
+- Parallel offset planes are ambiguous: they may be opposite faces of one wall
+  or separate nearby walls.
+- Synthetic point labels/layout are used only by the evaluator. The blind
+  detector is not allowed to use them.
+- There are no real E57 scans in the repository to establish real-world
+  precision, recall, wall topology, registration behaviour or failure modes.
+
+CAL-09.7 therefore still requires real customer E57 files, station/registration
+provenance where available, and independently surveyed wall geometry and
+defect/opening annotations. Keep this branch experimental. Production YAML,
+source E57, training labels, trained weights and production wall code remain
+untouched.
+
+
+## Development iteration notes
+
+The first XYZ-only RANSAC version (without local PCA normal guidance) completed
+all 12 development scenes but did not meet the preregistered holdout targets:
+mean point precision 0.883, recall 0.538, FPR 0.123, visible wall-instance
+recall 0.514 and topology edge recall 0.271. A retry-only RANSAC change did not
+materially improve the result. The current branch therefore adds local PCA
+normal/planarity guidance before any holdout run. The 611xx holdout remains
+untouched and will not run until the new development metrics are reviewed and
+the detector/evaluator fingerprints are frozen.
+
+
+## Final development results and stop decision
+
+Three detector variants were evaluated on the same 12 development scenes
+(60101, 60102, 60105, 60106 × three geometry variants). All runs used
+0.10m mesh and 0.1° scanner step. All 80 regression tests and the real
+synthetic-raycaster smoke passed for the final soft-normal implementation.
+
+| Detector variant | Point precision | Point recall | Point FPR | Wall-instance recall | Topology edge recall |
+|---|---:|---:|---:|---:|---:|
+| Initial blind RANSAC | 88.7% | 53.8% | 12.1% | 50.0% | 26.0% |
+| Hard local-PCA normal gate | 92.9% | 48.3% | 8.5% | 47.2% | 11.5% |
+| Soft PCA-guided RANSAC (current) | 89.6% | 53.0% | 10.7% | 50.0% | 12.5% |
+
+The retry-only RANSAC change did not materially change the initial
+baseline. The hard PCA gate improved precision/FPR but removed too many
+true returns and topology edges. Soft PCA weighting recovered some recall
+but did not improve wall or topology recall enough.
+
+Current soft-PCA per-seed results show severe instability:
+- 60101: recall 34.8%, wall-instance recall 16.7%, no predicted topology edges.
+- 60102: recall 29.8%, wall-instance recall 33.3%, edge recall 12.5%.
+- 60105: recall 71.7%, wall-instance recall 83.3%, edge recall 0%.
+- 60106: recall 75.7%, FPR 31.2%, wall-instance recall 66.7%, edge recall 37.5%.
+
+**Decision: CAL096_DEVELOPMENT_NOT_ESTABLISHED.** The untouched 611xx
+holdout is deliberately NOT run. Preregistered holdout targets are
+precision >=90%, recall >=70%, FPR <=10%, worst-seed FPR <=15%,
+wall-instance recall >=80%, topology edge precision >=80%,
+topology edge recall >=70% and edge-type accuracy >=80%.
+Development mean recall 53.0%, worst-seed FPR 31.2%, wall recall 50.0%
+and topology recall 12.5% are too far from the gates to justify spending
+the independent holdout.
+
+### Reproducible completed runs
+
+- Initial blind RANSAC + retry diagnostic:
+  https://github.com/BykovVadimCV/E57toARCHICAD/actions/runs/43805836292/artifacts/14198916538
+- Hard PCA gate diagnostic:
+  https://github.com/BykovVadimCV/E57toARCHICAD/actions/runs/43806738652/artifacts/14199375094
+- Soft PCA-guided RANSAC (current):
+  https://github.com/BykovVadimCV/E57toARCHICAD/actions/runs/43807487073/artifacts/14199825047
+
+The CI pipeline is technically green; that is not detector acceptance.
+The current branch remains Draft and no production files were changed.
+
+### What this means for the next stage
+
+Do not continue threshold/parameter tuning on 601xx indefinitely. CAL-09.7
+must move to real E57 geometry with independently surveyed wall surfaces,
+wall junctions and openings. The repository contains no real E57 point-cloud
+dataset or independent surveyed wall truth, so a real-world acceptance
+experiment cannot be completed from repository fixtures alone. Request
+representative E57 files and independent wall annotations before making
+any production claim.
