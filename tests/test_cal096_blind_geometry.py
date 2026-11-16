@@ -106,11 +106,11 @@ def test_ransac_miss_retries_before_abandoning_remaining_xyz(monkeypatch):
     original = blind._ransac_plane
     calls = {"count": 0}
 
-    def intermittent(points, active_ids, rng, cfg):
+    def intermittent(points, active_ids, rng, cfg, **kwargs):
         calls["count"] += 1
         if calls["count"] == 1:
             return None
-        return original(points, active_ids, rng, cfg)
+        return original(points, active_ids, rng, cfg, **kwargs)
 
     monkeypatch.setattr(blind, "_ransac_plane", intermittent)
     result = blind.extract_wall_geometry(cloud, seed=72)
@@ -123,7 +123,7 @@ def test_ransac_stops_after_frozen_number_of_empty_rounds(monkeypatch):
 
     calls = {"count": 0}
 
-    def always_miss(points, active_ids, rng, cfg):
+    def always_miss(points, active_ids, rng, cfg, **kwargs):
         calls["count"] += 1
         return None
 
