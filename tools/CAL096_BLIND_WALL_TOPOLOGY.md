@@ -23,16 +23,22 @@ baseline:
 
 1. Reject non-finite returns; voxel-thin to 25mm representatives, capped at
    200,000 points. Preserve a source-index map for evaluation and E57 traceability.
-2. Estimate local 3D PCA normals from the 20 nearest XYZ neighbours. RANSAC
-   hypotheses are drawn only from locally planar, near-vertical points:
-   planarity ratio <=0.35, tangent variance >=0.0004m², normal within 22°
-   of horizontal. Pair normals and candidate plane normals must agree within 25°.
+2. Estimate local 3D PCA normals from the 20 nearest XYZ neighbours. A
+   proposal pool uses near-vertical normals (within 22° of horizontal),
+   planarity ratio <=0.35 and tangent variance >=0.0004m². If that pool is too
+   small, proposal sampling falls back to all active XYZ points.
 3. Propose vertical planes with seeded RANSAC in XY (256 hypotheses over up to
-   16,000 candidates). A candidate needs long horizontal support and at least
-   1.8m vertical extent. Up to three independent proposal rounds are allowed
-   after a stochastic miss; the search stops after three consecutive failures.
-4. Refine the line by robust total least squares and a fixed 40mm inlier bound.
-   Final inliers must also have a near-vertical local normal aligned to the plane.
+   16,000 proposal points). Pair-normal agreement and plane-normal alignment
+   are checked within 30°. The inlier count is weighted by a soft normal
+   alignment factor (weight 0.35), rather than hard-rejecting every return
+   with an uncertain local normal. A candidate needs long horizontal support
+   and at least 1.8m vertical extent. Up to three independent proposal rounds
+   are allowed after a stochastic miss; the search stops after three
+   consecutive failures.
+4. Refine the line by robust total least squares and a fixed 40mm inlier bound,
+   using the locally planar proposal pool where it has sufficient support.
+   Final predicted returns are all active XYZ points within the geometric
+   plane bound, so local normal uncertainty does not itself discard a point.
 5. Project inliers to along-wall distance and height. Split disconnected
    components on an 80mm occupancy grid with one 8-connected closing pass.
 6. Keep wall candidates only when fixed support, length, height, density,
