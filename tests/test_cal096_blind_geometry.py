@@ -99,6 +99,42 @@ def test_topology_detects_corner_and_tee_from_plane_geometry():
     assert "tee" in kinds, result["topology"]
 
 
+def test_ransac_miss_retries_before_abandoning_remaining_xyz(monkeypatch):
+    import tools.cal096_blind_geometry as blind
+
+    cloud = _face("y", 0., 0., 5., seed=71)
+    original = blind._ransac_plane
+    calls = {"count": 0}
+
+    def intermittent(points, active_ids, rng, cfg):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return None
+        return original(points, active_ids, rng, cfg)
+
+    monkeypatch.setattr(blind, "_ransac_plane", intermittent)
+    result = blind.extract_wall_geometry(cloud, seed=72)
+    assert calls["count"] >= 2
+    assert any(s["wall_candidate"] for s in result["segments"])
+
+
+def test_ransac_stops_after_frozen_number_of_empty_rounds(monkeypatch):
+    import tools.cal096_blind_geometry as blind
+
+    calls = {"count": 0}
+
+    def always_miss(points, active_ids, rng, cfg):
+        calls["count"] += 1
+        return None
+
+    monkeypatch.setattr(blind, "_ransac_plane", always_miss)
+    result = blind.extract_wall_geometry(
+        _face("y", 0., 0., 5., seed=73),
+        config={"max_failed_plane_rounds": 2}, seed=74)
+    assert calls["count"] == 2
+    assert result["segments"] == []
+
+
 def test_parallel_offset_faces_are_hypotheses_not_adjacency_edges():
     cloud = np.vstack([
         _face("y", 0., 0., 4., seed=41),
