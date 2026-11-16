@@ -440,6 +440,7 @@ def extract_wall_geometry(xyz, *, config=None, seed=9606):
                 "reason": "insufficient_vertical_wall_extent",
             })
             active[inliers] = False
+            plane_id += 1
             continue
         new_segments = _component_segments(
             points, source_indices, plane_id, normal, bias, inliers, residuals, cfg)
