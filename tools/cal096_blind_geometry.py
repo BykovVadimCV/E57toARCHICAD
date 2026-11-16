@@ -24,6 +24,7 @@ DEFAULTS = {
     "voxel_m": 0.025,
     "max_points": 200_000,
     "ransac_iterations": 256,
+    "max_failed_plane_rounds": 3,
     "ransac_sample_points": 16_000,
     "max_planes": 48,
     "plane_tolerance_m": 0.040,
@@ -400,21 +401,33 @@ def extract_wall_geometry(xyz, *, config=None, seed=9606):
     rng = np.random.default_rng(seed)
     active = np.ones(len(points), dtype=bool)
     segments, rejected = [], []
-    for plane_id in range(cfg["max_planes"]):
+    failed_rounds = 0
+    plane_id = 0
+    while plane_id < cfg["max_planes"]:
         active_ids = np.flatnonzero(active)
         if len(active_ids) < cfg["min_plane_support"]:
             break
         proposal = _ransac_plane(points, active_ids, rng, cfg)
         if proposal is None:
-            break
+            failed_rounds += 1
+            if failed_rounds >= cfg["max_failed_plane_rounds"]:
+                break
+            continue
         _, initial_normal, initial_bias = proposal
         refined = _refine_plane(points, active_ids, initial_normal,
                                 initial_bias, cfg["plane_tolerance_m"])
         if refined is None:
-            break
+            failed_rounds += 1
+            if failed_rounds >= cfg["max_failed_plane_rounds"]:
+                break
+            continue
         normal, bias, inliers, residuals = refined
         if len(inliers) < cfg["min_plane_support"]:
-            break
+            failed_rounds += 1
+            if failed_rounds >= cfg["max_failed_plane_rounds"]:
+                break
+            continue
+        failed_rounds = 0
         tangent = np.array([-normal[1], normal[0]])
         along = points[inliers, :2] @ tangent
         z = points[inliers, 2]
@@ -441,6 +454,7 @@ def extract_wall_geometry(xyz, *, config=None, seed=9606):
                 item["id"] = len(segments)
                 segments.append(item)
         active[inliers] = False
+        plane_id += 1
     topology = infer_topology(segments, cfg)
     return {
         "format": FORMAT,
