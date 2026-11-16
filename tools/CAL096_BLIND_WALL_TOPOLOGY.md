@@ -23,12 +23,19 @@ baseline:
 
 1. Reject non-finite returns; voxel-thin to 25mm representatives, capped at
    200,000 points. Preserve a source-index map for evaluation and E57 traceability.
-2. Propose vertical planes with seeded RANSAC in XY. A candidate needs long
-   horizontal support and at least 1.8m vertical extent.
-3. Refine the line by robust total least squares and a fixed 40mm inlier bound.
-4. Project inliers to along-wall distance and height. Split disconnected
+2. Estimate local 3D PCA normals from the 20 nearest XYZ neighbours. RANSAC
+   hypotheses are drawn only from locally planar, near-vertical points:
+   planarity ratio <=0.35, tangent variance >=0.0004m², normal within 22°
+   of horizontal. Pair normals and candidate plane normals must agree within 25°.
+3. Propose vertical planes with seeded RANSAC in XY (256 hypotheses over up to
+   16,000 candidates). A candidate needs long horizontal support and at least
+   1.8m vertical extent. Up to three independent proposal rounds are allowed
+   after a stochastic miss; the search stops after three consecutive failures.
+4. Refine the line by robust total least squares and a fixed 40mm inlier bound.
+   Final inliers must also have a near-vertical local normal aligned to the plane.
+5. Project inliers to along-wall distance and height. Split disconnected
    components on an 80mm occupancy grid with one 8-connected closing pass.
-5. Keep wall candidates only when fixed support, length, height, density,
+6. Keep wall candidates only when fixed support, length, height, density,
    occupancy and plane-residual gates pass.
 6. Infer graph edges from segment geometry alone:
    - corner: both finite segments reach the same perpendicular line intersection within the fixed junction tolerance;
@@ -176,3 +183,15 @@ provenance where available, and independently surveyed wall geometry and
 defect/opening annotations. Keep this branch experimental. Production YAML,
 source E57, training labels, trained weights and production wall code remain
 untouched.
+
+
+## Development iteration notes
+
+The first XYZ-only RANSAC version (without local PCA normal guidance) completed
+all 12 development scenes but did not meet the preregistered holdout targets:
+mean point precision 0.883, recall 0.538, FPR 0.123, visible wall-instance
+recall 0.514 and topology edge recall 0.271. A retry-only RANSAC change did not
+materially improve the result. The current branch therefore adds local PCA
+normal/planarity guidance before any holdout run. The 611xx holdout remains
+untouched and will not run until the new development metrics are reviewed and
+the detector/evaluator fingerprints are frozen.
