@@ -118,6 +118,12 @@ def _estimate_vertical_normals(points, cfg):
     return normals, vertical, vertical & planar
 
 
+def _unit_xy_normals(normals):
+    xy = np.asarray(normals, dtype=np.float64)[:, :2]
+    lengths = np.linalg.norm(xy, axis=1, keepdims=True)
+    return xy / np.maximum(lengths, 1e-12)
+
+
 def _ransac_plane(points, active_ids, rng, cfg, normals=None,
                   normal_candidates=None):
     """Propose a vertical plane from locally planar, normal-consistent XYZ."""
@@ -131,7 +137,7 @@ def _ransac_plane(points, active_ids, rng, cfg, normals=None,
     local = rng.choice(candidate_ids, size=take, replace=False)
     sample = points[local]
     xy = sample[:, :2]
-    sample_normals = normals[local, :2] if normals is not None else None
+    sample_normals = _unit_xy_normals(normals[local]) if normals is not None else None
     best = None
     align_cos = math.cos(math.radians(float(cfg["normal_alignment_max_deg"])))
     for _ in range(cfg["ransac_iterations"]):
@@ -158,7 +164,7 @@ def _ransac_plane(points, active_ids, rng, cfg, normals=None,
         residual = np.abs(points[candidate_ids, :2] @ normal + bias)
         inside = residual <= cfg["plane_tolerance_m"]
         if normals is not None:
-            aligned = np.abs(normals[candidate_ids, :2] @ normal) >= align_cos
+            aligned = np.abs(_unit_xy_normals(normals[candidate_ids]) @ normal) >= align_cos
             inside &= aligned
         count = int(inside.sum())
         if count < cfg["min_plane_support"]:
@@ -190,7 +196,7 @@ def _refine_plane(points, active_ids, initial_normal, initial_bias, tolerance,
     residual = np.abs(xy @ initial_normal + initial_bias)
     selected = residual <= tolerance
     if normals is not None:
-        selected &= np.abs(normals[fit_ids, :2] @ initial_normal) >= align_cos
+        selected &= np.abs(_unit_xy_normals(normals[fit_ids]) @ initial_normal) >= align_cos
     if int(selected.sum()) < 3:
         return None
     for _ in range(5):
@@ -207,7 +213,7 @@ def _refine_plane(points, active_ids, initial_normal, initial_bias, tolerance,
         cutoff = min(tolerance, max(0.012, med + 3.5 * scale))
         updated = residual <= cutoff
         if normals is not None:
-            updated &= np.abs(normals[fit_ids, :2] @ normal) >= align_cos
+            updated &= np.abs(_unit_xy_normals(normals[fit_ids]) @ normal) >= align_cos
         if int(updated.sum()) < 3:
             break
         if np.array_equal(updated, selected):
@@ -485,7 +491,7 @@ def extract_wall_geometry(xyz, *, config=None, seed=9606):
         active_fit = active_ids[normal_vertical[active_ids]]
         final_residual = np.abs(points[active_fit, :2] @ normal + bias)
         align_cos = math.cos(math.radians(float(cfg["normal_alignment_max_deg"])))
-        final_aligned = np.abs(normals[active_fit, :2] @ normal) >= align_cos
+        final_aligned = np.abs(_unit_xy_normals(normals[active_fit]) @ normal) >= align_cos
         final_keep = (final_residual <= cfg["plane_tolerance_m"]) & final_aligned
         inliers = active_fit[final_keep]
         residuals = final_residual[final_keep]
