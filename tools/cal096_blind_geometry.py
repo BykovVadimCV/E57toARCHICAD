@@ -30,7 +30,8 @@ DEFAULTS = {
     "normal_planarity_ratio": 0.35,
     "normal_min_tangent_variance_m2": 0.0004,
     "normal_vertical_max_deg": 22.0,
-    "normal_alignment_max_deg": 25.0,
+    "normal_alignment_max_deg": 30.0,
+    "normal_score_weight": 0.35,
     "ransac_sample_points": 16_000,
     "max_planes": 48,
     "plane_tolerance_m": 0.040,
@@ -126,20 +127,24 @@ def _unit_xy_normals(normals):
 
 def _ransac_plane(points, active_ids, rng, cfg, normals=None,
                   normal_candidates=None):
-    """Propose a vertical plane from locally planar, normal-consistent XYZ."""
-    if normal_candidates is None:
+    """Propose a vertical plane from XYZ; PCA normals softly rank hypotheses."""
+    use_normal_gate = normals is not None and normal_candidates is not None
+    candidate_ids = (active_ids[normal_candidates[active_ids]]
+                     if use_normal_gate else active_ids)
+    if len(candidate_ids) < cfg["min_plane_support"]:
         candidate_ids = active_ids
-    else:
-        candidate_ids = active_ids[normal_candidates[active_ids]]
+        use_normal_gate = False
     if len(candidate_ids) < cfg["min_plane_support"]:
         return None
     take = min(len(candidate_ids), cfg["ransac_sample_points"])
     local = rng.choice(candidate_ids, size=take, replace=False)
     sample = points[local]
     xy = sample[:, :2]
-    sample_normals = _unit_xy_normals(normals[local]) if normals is not None else None
+    sample_normals = (_unit_xy_normals(normals[local])
+                      if use_normal_gate else None)
     best = None
     align_cos = math.cos(math.radians(float(cfg["normal_alignment_max_deg"])))
+    weight = float(cfg["normal_score_weight"])
     for _ in range(cfg["ransac_iterations"]):
         a, b = rng.integers(0, take, size=2)
         if a == b:
@@ -161,21 +166,23 @@ def _ransac_plane(points, active_ids, rng, cfg, normals=None,
                     abs(float(sample_normals[b] @ normal)) < align_cos):
                 continue
         bias = -float(normal @ xy[a])
-        residual = np.abs(points[candidate_ids, :2] @ normal + bias)
+        residual = np.abs(xy @ normal + bias)
         inside = residual <= cfg["plane_tolerance_m"]
-        if normals is not None:
-            aligned = np.abs(_unit_xy_normals(normals[candidate_ids]) @ normal) >= align_cos
-            inside &= aligned
         count = int(inside.sum())
         if count < cfg["min_plane_support"]:
             continue
-        projected = points[candidate_ids[inside], :2] @ tangent
-        z = points[candidate_ids[inside], 2]
+        projected = xy[inside] @ tangent
+        z = sample[inside, 2]
         span_s = float(np.quantile(projected, .95) - np.quantile(projected, .05))
         span_z = float(np.quantile(z, .95) - np.quantile(z, .05))
         if span_s < cfg["min_wall_length_m"] or span_z < cfg["min_wall_height_m"]:
             continue
-        score = count * min(1., span_s / 2.0) * min(1., span_z / 2.2)
+        normal_factor = 1.0
+        if sample_normals is not None:
+            aligned_fraction = float(np.mean(
+                np.abs(sample_normals[inside] @ normal) >= align_cos))
+            normal_factor = 1.0 - weight + weight * aligned_fraction
+        score = count * normal_factor * min(1., span_s / 2.0) * min(1., span_z / 2.2)
         if best is None or score > best[0]:
             best = (score, normal, bias)
     return best
@@ -183,20 +190,18 @@ def _ransac_plane(points, active_ids, rng, cfg, normals=None,
 
 def _refine_plane(points, active_ids, initial_normal, initial_bias, tolerance,
                   normals=None, normal_candidates=None, cfg=None):
-    """Robust TLS refinement on locally planar, aligned observed returns."""
+    """Robust TLS refinement; local PCA selects fit points but does not gate final returns."""
     if normal_candidates is not None:
         fit_ids = active_ids[normal_candidates[active_ids]]
     else:
         fit_ids = active_ids
+    if len(fit_ids) < max(3, int(cfg["min_plane_support"]) if cfg else 3):
+        fit_ids = active_ids
     if len(fit_ids) < 3:
         return None
     xy = points[fit_ids, :2]
-    align_cos = (math.cos(math.radians(float(cfg["normal_alignment_max_deg"])))
-                 if cfg is not None else None)
     residual = np.abs(xy @ initial_normal + initial_bias)
     selected = residual <= tolerance
-    if normals is not None:
-        selected &= np.abs(_unit_xy_normals(normals[fit_ids]) @ initial_normal) >= align_cos
     if int(selected.sum()) < 3:
         return None
     for _ in range(5):
@@ -212,8 +217,6 @@ def _refine_plane(points, active_ids, initial_normal, initial_bias, tolerance,
         scale = 1.4826 * float(np.median(np.abs(current - med)))
         cutoff = min(tolerance, max(0.012, med + 3.5 * scale))
         updated = residual <= cutoff
-        if normals is not None:
-            updated &= np.abs(_unit_xy_normals(normals[fit_ids]) @ normal) >= align_cos
         if int(updated.sum()) < 3:
             break
         if np.array_equal(updated, selected):
@@ -488,12 +491,9 @@ def extract_wall_geometry(xyz, *, config=None, seed=9606):
                 break
             continue
         normal, bias, fit_inliers, fit_residuals = refined
-        active_fit = active_ids[normal_vertical[active_ids]]
-        final_residual = np.abs(points[active_fit, :2] @ normal + bias)
-        align_cos = math.cos(math.radians(float(cfg["normal_alignment_max_deg"])))
-        final_aligned = np.abs(_unit_xy_normals(normals[active_fit]) @ normal) >= align_cos
-        final_keep = (final_residual <= cfg["plane_tolerance_m"]) & final_aligned
-        inliers = active_fit[final_keep]
+        final_residual = np.abs(points[active_ids, :2] @ normal + bias)
+        final_keep = final_residual <= cfg["plane_tolerance_m"]
+        inliers = active_ids[final_keep]
         residuals = final_residual[final_keep]
         if len(inliers) < cfg["min_plane_support"]:
             failed_rounds += 1
